@@ -27,7 +27,7 @@ const register = async (req, res) => {
   } catch (error) {
     let message = 'Erro ao registrar usuário.';
     if (error.code === 'auth/email-already-exists') {
-      message = 'Este email já está em uso.';
+      message = 'Email ou senha inválidos.';
     } else if (error.code === 'auth/invalid-password') {
       message = 'A senha deve ter no mínimo 6 caracteres.';
     }
