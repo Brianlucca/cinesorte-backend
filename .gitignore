@@ -1,0 +1,11 @@
+# Dependências
+node_modules
+
+# Arquivos de ambiente
+.env
+
+#
+src/config/serviceAccountKey.json
+
+# Logs
+npm-debug.log*
