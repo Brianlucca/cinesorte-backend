@@ -6,28 +6,17 @@ const register = async (req, res) => {
   if (!email || !password || !name) {
     return res.status(400).json({ message: 'Nome, email e senha são obrigatórios.' });
   }
-
   try {
-    const userPayload = {
+    const userRecord = await auth.createUser({
       email: email,
       password: password,
-    };
-
-    if (name) {
-      userPayload.displayName = name;
-    }
-
-    const userRecord = await auth.createUser(userPayload);
-
-    res.status(201).json({ 
-      uid: userRecord.uid, 
-      email: userRecord.email, 
-      name: userRecord.displayName 
+      displayName: name,
     });
+    res.status(201).json({ uid: userRecord.uid, email: userRecord.email, name: userRecord.displayName });
   } catch (error) {
     let message = 'Erro ao registrar usuário.';
     if (error.code === 'auth/email-already-exists') {
-      message = 'Email ou senha inválidos.';
+      message = 'Este email já está em uso.';
     } else if (error.code === 'auth/invalid-password') {
       message = 'A senha deve ter no mínimo 6 caracteres.';
     }
@@ -51,9 +40,21 @@ const login = async (req, res) => {
       returnSecureToken: true,
     });
     
+    const token = response.data.idToken;
+
+    const cookieOptions = {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    };
+
+    if (process.env.NODE_ENV === 'production') {
+      cookieOptions.sameSite = 'none';
+    }
+
+    res.cookie('authToken', token, cookieOptions);
+
     res.status(200).json({
-      message: 'Login bem-sucedido!',
-      token: response.data.idToken,
       uid: response.data.localId,
       email: response.data.email,
       name: response.data.displayName,
@@ -61,6 +62,21 @@ const login = async (req, res) => {
   } catch (error) {
     res.status(401).json({ message: 'Email ou senha inválidos.' });
   }
+};
+
+const logout = (req, res) => {
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    expires: new Date(0),
+  };
+
+  if (process.env.NODE_ENV === 'production') {
+    cookieOptions.sameSite = 'none';
+  }
+
+  res.cookie('authToken', '', cookieOptions);
+  res.status(200).json({ message: 'Logout bem-sucedido.' });
 };
 
 const getMe = async (req, res) => {
@@ -71,5 +87,6 @@ const getMe = async (req, res) => {
 module.exports = {
   register,
   login,
+  logout,
   getMe,
 };
