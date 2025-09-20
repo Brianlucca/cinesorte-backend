@@ -6,17 +6,16 @@ const getGenres = async (req, res) => {
     const response = await tmdbApi.get(`/genre/${mediaType}/list`);
     res.status(200).json(response.data.genres);
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao buscar gêneros.' });
+    console.error("Erro ao buscar gêneros:", error.message);
+    res.status(500).json([]);
   }
 };
 
 const getDiscover = async (req, res) => {
   const { mediaType, filters } = req.body;
-  
   if (!mediaType || !filters) {
     return res.status(400).json({ message: 'mediaType e filters são obrigatórios.' });
   }
-
   try {
     const baseParams = {
       sort_by: filters.sortBy,
@@ -25,7 +24,6 @@ const getDiscover = async (req, res) => {
       include_adult: false,
       watch_region: 'BR',
     };
-    
     if (filters.genre) baseParams.with_genres = filters.genre;
     if (filters.releaseYear) {
       if (mediaType === 'movie') {
@@ -38,21 +36,17 @@ const getDiscover = async (req, res) => {
     if (filters.keywords && filters.keywords.length > 0) {
       baseParams.with_keywords = filters.keywords.map(k => k.id).join(',');
     }
-
     const endpoint = `/discover/${mediaType}`;
     const pagePromises = [1, 2, 3, 4, 5].map(page => 
       tmdbApi.get(endpoint, { params: { ...baseParams, page } })
     );
-      
     const responses = await Promise.all(pagePromises);
     const allResults = responses.flatMap(response => response.data.results);
     const uniqueResults = Array.from(new Map(allResults.map(item => [item.id, item])).values());
     const resultsWithPosters = uniqueResults.filter(item => item.poster_path && item.overview);
-
     if (resultsWithPosters.length === 0) {
-      return res.status(404).json([]);
+      return res.status(200).json([]);
     }
-
     res.status(200).json(resultsWithPosters);
   } catch (error) {
     console.error(error);
