@@ -10,14 +10,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 const corsOptions = {
-  origin: function (origin, callback) {
-    const allowedOrigin = process.env.FRONTEND_URL;
-    if (!origin || (allowedOrigin && (origin === allowedOrigin || origin === `${allowedOrigin}/`))) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: process.env.FRONTEND_URL,
   credentials: true,
 };
 
