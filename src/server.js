@@ -12,9 +12,26 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 const corsOptions = {
-  origin: process.env.FRONTEND_URL,
+  origin: function (origin, callback) {
+    const allowedOrigin = process.env.FRONTEND_URL;
+
+    if (!origin || !allowedOrigin) {
+      callback(null, true);
+      return;
+    }
+    
+    const normalizedAllowedOrigin = allowedOrigin.endsWith('/') ? allowedOrigin.slice(0, -1) : allowedOrigin;
+    const normalizedOrigin = origin.endsWith('/') ? origin.slice(0, -1) : origin;
+
+    if (normalizedOrigin === normalizedAllowedOrigin) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
 };
+
 
 app.use(helmet());
 app.use(cors(corsOptions));
