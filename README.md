@@ -35,4 +35,3 @@ The API is structured in a modular way to promote separation of concerns and mai
 * **`/controllers`:** Contains all the business logic. Each controller is responsible for processing requests, interacting with services (like Firebase or TMDb), and sending the response.
 * **`/middleware`:** Contains application middleware, such as authentication token verification (`verifyToken`) and the request limiter (`rateLimiter`).
 * **`/config`:** Centralizes the configuration of external services, such as Firebase initialization.
-```eof
