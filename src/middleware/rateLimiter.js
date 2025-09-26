@@ -1,15 +1,16 @@
 const rateLimit = require('express-rate-limit');
 
 const tmdbApiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: {
-    message: 'Servidor sobrecarregado. Por favor, tente novamente em alguns instantes.'
-  },
+  windowMs: 1 * 60 * 1000,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  message: {
+    message: 'Servidor sobrecarregado. Por favor, tente novamente dentro de um minuto.',
+  },
 });
 
 module.exports = {
   tmdbApiLimiter,
 };
+
