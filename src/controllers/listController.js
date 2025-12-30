@@ -1,87 +1,82 @@
 const { db } = require('../config/firebase');
 
-const saveList = async (req, res) => {
+const upsertList = async (req, res) => {
   const { uid } = req.user;
-  const { listName, movies } = req.body;
+  const { listName, mediaItem } = req.body;
 
-  if (!uid || !listName || !movies) {
-    return res.status(400).json({ message: 'UID do usuário, nome da lista e filmes são obrigatórios.' });
-  }
-
-  if (listName.length > 50) {
-    return res.status(400).json({ message: 'O nome da lista deve ter no máximo 50 caracteres.' });
+  if (!listName || !mediaItem) {
+    return res.status(400).json({ message: 'List name and media item required' });
   }
 
   try {
     const listRef = db.collection('users').doc(uid).collection('lists').doc(listName);
-    await listRef.set({ movies, createdAt: new Date() });
-    res.status(201).json({ message: `Lista '${listName}' salva com sucesso!` });
+    const doc = await listRef.get();
+
+    let items = [];
+    if (doc.exists) {
+      items = doc.data().items || [];
+    }
+
+    const exists = items.some(item => item.id === mediaItem.id);
+    if (!exists) {
+      items.push({ ...mediaItem, addedAt: new Date() });
+      await listRef.set({ items, updatedAt: new Date() }, { merge: true });
+    }
+
+    res.status(200).json({ message: 'Item added to list' });
   } catch (error) {
-    res.status(500).json({ message: 'Erro interno ao salvar lista. Talvez já exista uma lista com este nome.' });
+    res.status(500).json({ message: 'Error updating list' });
   }
 };
 
-const getLists = async (req, res) => {
+const getUserLists = async (req, res) => {
   const { uid } = req.user;
   try {
-    const listsSnapshot = await db.collection('users').doc(uid).collection('lists').orderBy('createdAt', 'desc').get();
-    if (listsSnapshot.empty) {
-      return res.status(200).json([]);
-    }
+    const listsSnapshot = await db.collection('users').doc(uid).collection('lists').get();
     const lists = listsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     res.status(200).json(lists);
   } catch (error) {
-    res.status(500).json({ message: 'Erro interno ao buscar listas.' });
+    res.status(500).json({ message: 'Error fetching lists' });
   }
 };
 
 const deleteList = async (req, res) => {
-    const { uid } = req.user;
-    const { listId } = req.params;
-    if (!listId) {
-        return res.status(400).json({ message: 'ID da lista é obrigatório.' });
-    }
-    try {
-        const listRef = db.collection('users').doc(uid).collection('lists').doc(listId);
-        await listRef.delete();
-        res.status(200).json({ message: 'Lista deletada com sucesso.' });
-    } catch (error) {
-        res.status(500).json({ message: 'Erro interno ao deletar lista.' });
-    }
+  const { uid } = req.user;
+  const { listId } = req.params;
+
+  try {
+    await db.collection('users').doc(uid).collection('lists').doc(listId).delete();
+    res.status(200).json({ message: 'List deleted' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting list' });
+  }
 };
 
-const removeMovieFromList = async (req, res) => {
-    const { uid } = req.user;
-    const { listId, movieId } = req.params;
+const removeMediaFromList = async (req, res) => {
+  const { uid } = req.user;
+  const { listId, mediaId } = req.params;
 
-    if (!listId || !movieId) {
-        return res.status(400).json({ message: 'ID da lista e ID do filme são obrigatórios.' });
+  try {
+    const listRef = db.collection('users').doc(uid).collection('lists').doc(listId);
+    const doc = await listRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ message: 'List not found' });
     }
 
-    try {
-        const listRef = db.collection('users').doc(uid).collection('lists').doc(listId);
-        const doc = await listRef.get();
+    const currentItems = doc.data().items || [];
+    const updatedItems = currentItems.filter(item => item.id.toString() !== mediaId);
 
-        if (!doc.exists) {
-            return res.status(404).json({ message: 'Lista não encontrada.' });
-        }
-
-        const currentMovies = doc.data().movies || [];
-        const numericMovieId = parseInt(movieId, 10);
-        
-        const updatedMovies = currentMovies.filter(movie => movie.id !== numericMovieId);
-
-        await listRef.update({ movies: updatedMovies });
-
-        res.status(200).json({ message: 'Filme removido da lista com sucesso.' });
-    } catch (error) {
-        res.status(500).json({ message: 'Erro interno ao remover filme da lista.' });
-    }
+    await listRef.update({ items: updatedItems, updatedAt: new Date() });
+    res.status(200).json({ message: 'Item removed' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error removing item' });
+  }
 };
 
 module.exports = {
-  saveList,
-  getLists,
+  upsertList,
+  getUserLists,
   deleteList,
-  removeMovieFromList,
+  removeMediaFromList,
 };
