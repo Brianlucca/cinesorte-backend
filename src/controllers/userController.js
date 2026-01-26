@@ -64,7 +64,6 @@ const deleteAccount = async (req, res) => {
         
         res.status(200).json({ message: 'Conta excluída permanentemente.' });
     } catch (error) {
-        console.error("Erro ao deletar conta:", error);
         res.status(500).json({ message: 'Erro ao excluir conta.' });
     }
 };
