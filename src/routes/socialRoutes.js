@@ -1,21 +1,33 @@
 const express = require('express');
 const router = express.Router();
-const interactionController = require('../controllers/interactionController');
 const socialController = require('../controllers/socialController');
 const listController = require('../controllers/listController');
 const { verifyToken } = require('../middleware/authMiddleware');
 
-router.post('/interact', verifyToken, interactionController.recordInteraction);
-router.get('/interactions', verifyToken, interactionController.getUserInteractions);
+
 
 router.post('/follow', verifyToken, socialController.followUser);
 router.delete('/unfollow/:targetUserId', verifyToken, socialController.unfollowUser);
+router.get('/check-follow/:targetUserId', verifyToken, socialController.checkFollowStatus);
+router.get('/suggestions', verifyToken, socialController.getSuggestions);
+router.get('/stats', verifyToken, socialController.getUserStats);
+router.get('/profile-stats/:userId', socialController.getProfileStats);
+router.get('/match/:targetUserId', verifyToken, socialController.getMatchPercentage);
+router.get('/followers/:userId', socialController.getUserFollowersList);
+router.get('/following/:userId', socialController.getUserFollowingList);
+router.post('/share-list', verifyToken, socialController.shareList);
+router.get('/lists/:username/:listId', listController.getPublicListDetails);
 router.post('/reviews', verifyToken, socialController.addReview);
+router.delete('/reviews/:reviewId', verifyToken, socialController.deleteReview);
 router.get('/reviews/:mediaId', socialController.getMediaReviews);
-
-router.post('/lists', verifyToken, listController.upsertList);
-router.get('/lists', verifyToken, listController.getUserLists);
-router.delete('/lists/:listId', verifyToken, listController.deleteList);
-router.delete('/lists/:listId/media/:mediaId', verifyToken, listController.removeMediaFromList);
+router.get('/user-reviews/:username', socialController.getUserReviews);
+router.post('/reviews/:reviewId/like', verifyToken, socialController.toggleLikeReview);
+router.post('/comments', verifyToken, socialController.addComment);
+router.delete('/comments/:commentId', verifyToken, socialController.deleteComment);
+router.get('/comments/:reviewId', socialController.getComments);
+router.get('/feed/global', socialController.getGlobalFeed);
+router.get('/feed/following', verifyToken, socialController.getFollowingFeed);
+router.get('/feed/collections', socialController.getSharedListsFeed);
 
 module.exports = router;
+
