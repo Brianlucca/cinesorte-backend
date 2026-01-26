@@ -95,7 +95,7 @@ const register = async (req, res) => {
         genreCounts: {},
         termsVersion: CURRENT_TERMS_VERSION,
         termsAcceptedAt: new Date(),
-        termsAcceptedIP: req.ip || "unknown",
+        termsAcceptedUserAgent: req.headers["user-agent"] || "unknown",
         photoURL: null,
         backgroundURL: null,
         bio: null,
@@ -289,7 +289,6 @@ const updateProfile = async (req, res) => {
         t.set(auditRef, {
           changes: history,
           timestamp: new Date(),
-          ip: req.ip || "unknown",
           userAgent: req.headers["user-agent"] || "unknown",
         });
       }
@@ -297,8 +296,6 @@ const updateProfile = async (req, res) => {
 
     res.status(200).json({ message: "Perfil atualizado com sucesso." });
   } catch (error) {
-    console.error("Erro no updateProfile:", error);
-
     if (error.message === "USERNAME_TAKEN")
       return res.status(400).json({ message: "Username em uso." });
     if (error.message === "USER_NOT_FOUND")
