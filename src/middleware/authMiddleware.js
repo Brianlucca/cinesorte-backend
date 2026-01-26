@@ -1,23 +1,41 @@
-const { auth } = require('../config/firebase');
+const { auth, db } = require('../config/firebase');
 
 const verifyToken = async (req, res, next) => {
-  const token = req.cookies.authToken;
-  if (!token) {
-    return res.status(403).json({ message: 'Unauthorized access' });
-  }
-
-  try {
-    const decodedToken = await auth.verifyIdToken(token);
+    const sessionCookie = req.cookies.authToken || '';
     
-    if (!decodedToken.email_verified) {
-      return res.status(403).json({ message: 'Email verification required' });
-    }
+    try {
+        const decodedClaims = await auth.verifySessionCookie(sessionCookie, true);
+        
+        if (!decodedClaims.email_verified) {
+             return res.status(403).json({ message: 'Verifique seu email.' });
+        }
 
-    req.user = decodedToken;
-    next();
-  } catch (error) {
-    return res.status(403).json({ message: 'Invalid or expired token' });
-  }
+        const userDoc = await db.collection('users').doc(decodedClaims.uid).get();
+        req.user = { ...decodedClaims, ...userDoc.data() };
+        
+        next();
+    } catch (error) {
+        res.status(401).json({ message: 'Sessão expirada. Faça login novamente.' });
+    }
 };
 
-module.exports = { verifyToken };
+const optionalVerify = async (req, res, next) => {
+    const sessionCookie = req.cookies.authToken || '';
+    if (sessionCookie) {
+        try {
+            const decodedClaims = await auth.verifySessionCookie(sessionCookie, true);
+            req.user = decodedClaims;
+        } catch (e) {}
+    }
+    next();
+};
+
+const requireTerms = (req, res, next) => {
+    const CURRENT_TERMS_VERSION = '1.0'; 
+    if (req.user && req.user.termsVersion !== CURRENT_TERMS_VERSION) {
+        return res.status(403).json({ code: 'TERMS_NOT_ACCEPTED', message: 'É necessário aceitar os novos termos de uso.' });
+    }
+    next();
+};
+
+module.exports = { verifyToken, optionalVerify, requireTerms };
