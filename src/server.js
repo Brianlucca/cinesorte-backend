@@ -5,10 +5,10 @@ const helmet = require('helmet');
 require('dotenv').config();
 
 const tmdbRoutes = require('./routes/tmdbRoutes');
-const userRoutes = require('./routes/userRoutes');
+const interactionRoutes = require('./routes/interactionRoutes');
 const socialRoutes = require('./routes/socialRoutes');
-const { tmdbApiLimiter } = require('./middleware/rateLimiter');
-const { sanitizeInput } = require('./middleware/securityMiddleware');
+const authRoutes = require('./routes/authRoutes');
+const { tmdbApiLimiter, sanitizeInput } = require('./middleware/securityMiddleware');
 const { startKeepAlive } = require('./services/keepAliveService');
 
 const app = express();
@@ -45,7 +45,8 @@ app.get('/', (req, res) => {
 });
 
 app.use('/api/tmdb', tmdbApiLimiter, tmdbRoutes);
-app.use('/api/users', userRoutes);
+app.use('/api/users', authRoutes);
+app.use('/api/users', interactionRoutes);
 app.use('/api/social', socialRoutes);
 
 if (process.env.NODE_ENV === 'production') {
