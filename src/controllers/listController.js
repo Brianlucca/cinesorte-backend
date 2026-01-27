@@ -224,6 +224,46 @@ const removeMediaFromList = async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Erro.' }); }
 };
 
+const shareList = async (req, res) => {
+    const { uid } = req.user;
+    const { listId, content } = req.body;
+  
+    try {
+      const listDoc = await db.collection('users').doc(uid).collection('lists').doc(listId).get();
+      
+      if (!listDoc.exists) {
+          return res.status(404).json({ message: "Lista não encontrada." });
+      }
+      const listData = listDoc.data();
+      
+      if (!listData.isPublic) {
+          return res.status(400).json({ message: "Você só pode compartilhar listas públicas." });
+      }
+  
+      const userDoc = await db.collection('users').doc(uid).get();
+      const userData = userDoc.data();
+  
+      const newShare = {
+        userId: uid,
+        username: userData.username,
+        userPhoto: userData.photoURL || null,
+        levelTitle: userData.levelTitle || 'Espectador',
+        listId: listId,
+        listName: listData.name, 
+        content: content || `Confira minha nova coleção: ${listData.name}`,
+        type: 'list_share', 
+        createdAt: new Date(),
+        likesCount: 0,
+        commentsCount: 0
+      };
+  
+      const docRef = await db.collection('shared_lists').add(newShare);
+      res.status(201).json({ id: docRef.id, message: "Coleção compartilhada com sucesso!" });
+    } catch (error) {
+      res.status(500).json({ message: "Erro ao compartilhar coleção." });
+    }
+};
+
 module.exports = { 
     upsertList, 
     cloneList, 
@@ -231,5 +271,6 @@ module.exports = {
     getUserLists, 
     deleteList, 
     removeMediaFromList,
-    getPublicListDetails 
+    getPublicListDetails,
+    shareList
 };
