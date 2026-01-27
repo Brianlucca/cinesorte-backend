@@ -8,6 +8,7 @@ const tmdbRoutes = require('./routes/tmdbRoutes');
 const interactionRoutes = require('./routes/interactionRoutes');
 const socialRoutes = require('./routes/socialRoutes');
 const authRoutes = require('./routes/authRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 const { tmdbApiLimiter, sanitizeInput } = require('./middleware/securityMiddleware');
 const { startKeepAlive } = require('./services/keepAliveService');
 
@@ -48,6 +49,7 @@ app.use('/api/tmdb', tmdbApiLimiter, tmdbRoutes);
 app.use('/api/users', authRoutes);
 app.use('/api/users', interactionRoutes);
 app.use('/api/social', socialRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 if (process.env.NODE_ENV === 'production') {
   startKeepAlive();
