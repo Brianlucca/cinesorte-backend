@@ -142,19 +142,11 @@ const getSharedListsFeed = async (req, res) => {
           }
         } catch (e) {}
 
-        let userData = {};
-        try {
-          const userDoc = await db.collection("users").doc(data.userId).get();
-          if (userDoc.exists) {
-            userData = userDoc.data();
-          }
-        } catch (e) {}
-
         return {
           id: doc.id,
           ...data,
-          username: userData.username || data.username || "Usuário",
-          userPhoto: userData.photoURL || data.userPhoto || null,
+          username: data.username || "Usuário",
+          userPhoto: data.userPhoto || null,
           listName: currentListName,
           listCount,
           listItems,
@@ -372,20 +364,7 @@ const getGlobalFeed = async (req, res) => {
             .get();
           isLikedByCurrentUser = likeSnap.exists;
         }
-        const repliesSnap = await db
-          .collection("comments")
-          .where("reviewId", "==", doc.id)
-          .get();
-        const replies = repliesSnap.docs.map((r) => ({
-          id: r.id,
-          ...r.data(),
-        }));
-        replies.sort(
-          (a, b) =>
-            (a.createdAt?.toDate?.() || new Date(a.createdAt)) -
-            (b.createdAt?.toDate?.() || new Date(b.createdAt)),
-        );
-        return { id: doc.id, ...data, isLikedByCurrentUser, replies };
+        return { id: doc.id, ...data, isLikedByCurrentUser, replies: [] };
       }),
     );
     res.status(200).json(feed);
@@ -407,11 +386,14 @@ const getFollowingFeed = async (req, res) => {
       .map((doc) => doc.id)
       .filter((id) => id !== uid);
     if (followingIds.length === 0) return res.status(200).json([]);
+    
+    const userRefs = followingIds.slice(0, 10).map(id => db.collection("users").doc(id));
     const snap = await db
       .collection("reviews")
       .where("userId", "in", followingIds.slice(0, 10))
       .limit(10)
       .get();
+      
     const allReviews = await Promise.all(
       snap.docs.map(async (d) => {
         const data = d.data();
@@ -421,19 +403,11 @@ const getFollowingFeed = async (req, res) => {
           .collection("likes")
           .doc(uid)
           .get();
-        const repliesSnap = await db
-          .collection("comments")
-          .where("reviewId", "==", d.id)
-          .get();
-        const replies = repliesSnap.docs.map((r) => ({
-          id: r.id,
-          ...r.data(),
-        }));
         return {
           id: d.id,
           ...data,
           isLikedByCurrentUser: likeSnap.exists,
-          replies,
+          replies: [],
         };
       }),
     );
@@ -483,14 +457,6 @@ const getMediaReviews = async (req, res) => {
     let reviews = await Promise.all(
       snapshot.docs.map(async (doc) => {
         const data = doc.data();
-        const repliesSnap = await db
-          .collection("comments")
-          .where("reviewId", "==", doc.id)
-          .get();
-        const replies = repliesSnap.docs.map((r) => ({
-          id: r.id,
-          ...r.data(),
-        }));
         let isLiked = false;
         if (uid) {
           const likeSnap = await db
@@ -501,7 +467,7 @@ const getMediaReviews = async (req, res) => {
             .get();
           isLiked = likeSnap.exists;
         }
-        return { id: doc.id, ...data, replies, isLikedByCurrentUser: isLiked };
+        return { id: doc.id, ...data, replies: [], isLikedByCurrentUser: isLiked };
       }),
     );
     reviews.sort(
@@ -543,15 +509,7 @@ const getUserReviews = async (req, res) => {
             .get();
           isLiked = likeSnap.exists;
         }
-        const repliesSnap = await db
-          .collection("comments")
-          .where("reviewId", "==", doc.id)
-          .get();
-        const replies = repliesSnap.docs.map((r) => ({
-          id: r.id,
-          ...r.data(),
-        }));
-        return { id: doc.id, ...data, isLikedByCurrentUser: isLiked, replies };
+        return { id: doc.id, ...data, isLikedByCurrentUser: isLiked, replies: [] };
       }),
     );
     reviews.sort(
@@ -566,7 +524,7 @@ const getUserReviews = async (req, res) => {
 };
 
 const toggleLikeReview = async (req, res) => {
-  const { uid } = req.user;
+  const { uid, name, photoURL } = req.user; 
   const { reviewId } = req.params;
   const reviewRef = db.collection("reviews").doc(reviewId);
   const likeRef = reviewRef.collection("likes").doc(uid);
@@ -582,7 +540,12 @@ const toggleLikeReview = async (req, res) => {
           likesCount: currentLikes > 0 ? currentLikes - 1 : 0,
         });
       } else {
-        t.set(likeRef, { userId: uid, createdAt: new Date() });
+        t.set(likeRef, { 
+            userId: uid, 
+            name: name || "Usuário", 
+            photoURL: photoURL || null,
+            createdAt: new Date() 
+        });
         t.update(reviewRef, { likesCount: currentLikes + 1 });
       }
     });
@@ -790,15 +753,16 @@ const getUserFollowersList = async (req, res) => {
       .limit(50)
       .get();
     if (snapshot.empty) return res.status(200).json([]);
-    const usersDocs = await Promise.all(
-      snapshot.docs.map((doc) => db.collection("users").doc(doc.id).get()),
-    );
-    res
-      .status(200)
-      .json(
+    
+    const userRefs = snapshot.docs.map(doc => db.collection("users").doc(doc.id));
+    if (userRefs.length === 0) return res.status(200).json([]);
+
+    const usersDocs = await db.getAll(...userRefs);
+    
+    res.status(200).json(
         usersDocs
           .filter((doc) => doc.exists)
-          .map((doc) => ({ id: doc.id, ...doc.data() })),
+          .map((doc) => ({ id: doc.id, ...doc.data() }))
       );
   } catch (error) {
     res.status(500).json([]);
@@ -815,15 +779,16 @@ const getUserFollowingList = async (req, res) => {
       .limit(50)
       .get();
     if (snapshot.empty) return res.status(200).json([]);
-    const usersDocs = await Promise.all(
-      snapshot.docs.map((doc) => db.collection("users").doc(doc.id).get()),
-    );
-    res
-      .status(200)
-      .json(
+
+    const userRefs = snapshot.docs.map(doc => db.collection("users").doc(doc.id));
+    if (userRefs.length === 0) return res.status(200).json([]);
+
+    const usersDocs = await db.getAll(...userRefs);
+
+    res.status(200).json(
         usersDocs
           .filter((doc) => doc.exists)
-          .map((doc) => ({ id: doc.id, ...doc.data() })),
+          .map((doc) => ({ id: doc.id, ...doc.data() }))
       );
   } catch (error) {
     res.status(500).json([]);
