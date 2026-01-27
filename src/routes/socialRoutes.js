@@ -2,9 +2,7 @@ const express = require('express');
 const router = express.Router();
 const socialController = require('../controllers/socialController');
 const listController = require('../controllers/listController');
-const { verifyToken } = require('../middleware/authMiddleware');
-
-
+const { verifyToken, optionalVerify } = require('../middleware/authMiddleware');
 
 router.post('/follow', verifyToken, socialController.followUser);
 router.delete('/unfollow/:targetUserId', verifyToken, socialController.unfollowUser);
@@ -19,15 +17,14 @@ router.post('/share-list', verifyToken, socialController.shareList);
 router.get('/lists/:username/:listId', listController.getPublicListDetails);
 router.post('/reviews', verifyToken, socialController.addReview);
 router.delete('/reviews/:reviewId', verifyToken, socialController.deleteReview);
-router.get('/reviews/:mediaId', socialController.getMediaReviews);
-router.get('/user-reviews/:username', socialController.getUserReviews);
+router.get('/reviews/:mediaId', optionalVerify, socialController.getMediaReviews);
+router.get('/user-reviews/:username', optionalVerify, socialController.getUserReviews);
 router.post('/reviews/:reviewId/like', verifyToken, socialController.toggleLikeReview);
 router.post('/comments', verifyToken, socialController.addComment);
 router.delete('/comments/:commentId', verifyToken, socialController.deleteComment);
 router.get('/comments/:reviewId', socialController.getComments);
-router.get('/feed/global', socialController.getGlobalFeed);
+router.get('/feed/global', optionalVerify, socialController.getGlobalFeed);
 router.get('/feed/following', verifyToken, socialController.getFollowingFeed);
 router.get('/feed/collections', socialController.getSharedListsFeed);
 
 module.exports = router;
-
