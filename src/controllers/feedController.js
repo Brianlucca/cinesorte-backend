@@ -18,7 +18,26 @@ exports.getGlobalFeed = catchAsync(async (req, res, next) => {
           .get();
         isLikedByCurrentUser = likeSnap.exists;
       }
-      return { id: doc.id, ...data, isLikedByCurrentUser, replies: [] };
+      return {
+        id: doc.id,
+        mediaId: data.mediaId,
+        mediaType: data.mediaType,
+        mediaTitle: data.mediaTitle,
+        posterPath: data.posterPath || null,
+        backdropPath: data.backdropPath || null,
+        rating: data.rating,
+        text: data.text || null,
+        likesCount: data.likesCount || 0,
+        commentsCount: data.commentsCount || 0,
+        createdAt: data.createdAt,
+        username: data.username || 'Usuário',
+        userPhoto: data.userPhoto || null,
+        levelTitle: data.levelTitle || null,
+        isEliteReview: data.isEliteReview || false,
+        isEdited: data.isEdited || false,
+        isLikedByCurrentUser,
+        replies: [],
+      };
     }),
   );
   res.status(200).json(feed);
@@ -54,7 +73,21 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
         .get();
       return {
         id: d.id,
-        ...data,
+        mediaId: data.mediaId,
+        mediaType: data.mediaType,
+        mediaTitle: data.mediaTitle,
+        posterPath: data.posterPath || null,
+        backdropPath: data.backdropPath || null,
+        rating: data.rating,
+        text: data.text || null,
+        likesCount: data.likesCount || 0,
+        commentsCount: data.commentsCount || 0,
+        createdAt: data.createdAt,
+        username: data.username || 'Usuário',
+        userPhoto: data.userPhoto || null,
+        levelTitle: data.levelTitle || null,
+        isEliteReview: data.isEliteReview || false,
+        isEdited: data.isEdited || false,
         isLikedByCurrentUser: likeSnap.exists,
         replies: [],
       };
@@ -96,13 +129,13 @@ exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
       } catch (e) {}
       return {
         id: doc.id,
-        ...data,
         username: data.username || "Usuário",
         userPhoto: data.userPhoto || null,
         listName: currentListName,
         listCount,
         listItems,
         attachmentId: data.listId,
+        createdAt: data.createdAt,
       };
     }),
   );
