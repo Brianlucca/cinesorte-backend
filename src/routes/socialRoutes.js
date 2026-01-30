@@ -1,13 +1,12 @@
 const express = require('express');
 const router = express.Router();
-
-// Importando os 4 controladores organizados
 const socialController = require('../controllers/socialController');
 const reviewController = require('../controllers/reviewController');
 const feedController = require('../controllers/feedController');
 const listController = require('../controllers/listController');
-
-const { verifyToken, optionalVerify } = require('../middleware/authMiddleware');
+const { verifyToken, optionalVerify } = require('../middleware/auth');
+const validate = require('../middleware/validate');
+const { reviewSchema, commentSchema } = require('../schemas/schemas');
 
 router.get('/feed/global', optionalVerify, feedController.getGlobalFeed);
 router.get('/feed/following', verifyToken, feedController.getFollowingFeed);
@@ -23,12 +22,15 @@ router.get('/match/:targetUserId', verifyToken, socialController.getMatchPercent
 router.get('/followers/:userId', socialController.getUserFollowersList);
 router.get('/following/:userId', socialController.getUserFollowingList);
 
-router.post('/reviews', verifyToken, reviewController.addReview);
+router.post('/reviews', verifyToken, validate(reviewSchema), reviewController.addReview);
+router.put('/reviews/:reviewId', verifyToken, reviewController.updateReview);
 router.delete('/reviews/:reviewId', verifyToken, reviewController.deleteReview);
-router.get('/reviews/:mediaId', optionalVerify, reviewController.getMediaReviews);
-router.get('/user-reviews/:username', optionalVerify, reviewController.getUserReviews);
+router.get('/reviews/:mediaId', verifyToken, reviewController.getMediaReviews);
+router.get('/user-reviews/:username', verifyToken, reviewController.getUserReviews);
 router.post('/reviews/:reviewId/like', verifyToken, reviewController.toggleLikeReview);
-router.post('/comments', verifyToken, reviewController.addComment);
+
+router.post('/comments', verifyToken, validate(commentSchema), reviewController.addComment);
+router.put('/comments/:commentId', verifyToken, reviewController.updateComment);
 router.delete('/comments/:commentId', verifyToken, reviewController.deleteComment);
 router.get('/comments/:reviewId', reviewController.getComments);
 

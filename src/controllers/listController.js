@@ -1,276 +1,314 @@
-const { db } = require('../config/firebase');
-const admin = require('firebase-admin');
-const { containsProfanity } = require('../utils/validators');
+const { db } = require("../config/firebase");
+const admin = require("firebase-admin");
+const { containsProfanity } = require("../utils/profanity");
+const catchAsync = require("../utils/catchAsync");
+const AppError = require("../utils/AppError");
 
-const upsertList = async (req, res) => {
-    const { uid } = req.user;
-    const { listId, listName, description, isPublic } = req.body;
+exports.upsertList = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { listId, listName, description, isPublic } = req.body;
 
-    if (containsProfanity(listName) || containsProfanity(description)) {
-        return res.status(400).json({ message: 'Nome ou descrição impróprios.' });
-    }
+  if (
+    containsProfanity(listName) ||
+    (description && containsProfanity(description))
+  ) {
+    return next(new AppError("Nome ou descrição impróprios.", 400));
+  }
 
-    try {
-        const id = listId || listName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + Date.now().toString().slice(-4);
-        const listRef = db.collection('users').doc(uid).collection('lists').doc(id);
-        
-        const listData = {
-            id: id, 
-            name: listName,
-            description: description || '',
-            isPublic: isPublic !== undefined ? isPublic : true,
-            updatedAt: new Date()
-        };
+  const id =
+    listId ||
+    listName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") +
+      "-" +
+      Date.now().toString().slice(-4);
+  const listRef = db.collection("users").doc(uid).collection("lists").doc(id);
 
-        if (!listId) {
-            listData.items = [];
-            listData.createdAt = new Date();
-            listData.userId = uid; 
-            listData.savesCount = 0;
-        }
+  if (listId) {
+    const doc = await listRef.get();
+    if (!doc.exists) return next(new AppError("Lista não encontrada.", 404));
+  }
 
-        await listRef.set(listData, { merge: true });
-        res.status(200).json({ message: 'Lista salva.', listId: id });
-    } catch (error) { res.status(500).json({ message: 'Erro.' }); }
-};
+  const listData = {
+    id,
+    name: listName,
+    description: description || "",
+    isPublic: isPublic !== undefined ? isPublic : true,
+    updatedAt: new Date(),
+    userId: uid,
+  };
 
-const cloneList = async (req, res) => {
-    const { uid } = req.user;
-    const { ownerUsername, originalListId } = req.body;
+  if (!listId) {
+    listData.items = [];
+    listData.createdAt = new Date();
+    listData.savesCount = 0;
+  }
 
-    try {
-        const ownerSnap = await db.collection('users').where('username', '==', ownerUsername).limit(1).get();
-        if (ownerSnap.empty) return res.status(404).json({ message: 'Dono da lista não encontrado.' });
-        
-        const ownerId = ownerSnap.docs[0].id;
-        
-        if (ownerId === uid) {
-            return res.status(400).json({ message: 'Você não pode clonar sua própria lista.' });
-        }
+  await listRef.set(listData, { merge: true });
+  res.status(200).json({ message: "Lista salva.", listId: id });
+});
 
-        const originalListRef = db.collection('users').doc(ownerId).collection('lists').doc(originalListId);
-        const originalDoc = await originalListRef.get();
+exports.cloneList = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { ownerUsername, originalListId } = req.body;
 
-        if (!originalDoc.exists) return res.status(404).json({ message: 'Lista não encontrada.' });
-        const data = originalDoc.data();
+  const ownerSnap = await db
+    .collection("users")
+    .where("username", "==", ownerUsername)
+    .limit(1)
+    .get();
+  if (ownerSnap.empty)
+    return next(new AppError("Dono da lista não encontrado.", 404));
 
-        if (!data.isPublic) return res.status(403).json({ message: 'Lista privada.' });
+  const ownerId = ownerSnap.docs[0].id;
+  if (ownerId === uid)
+    return next(new AppError("Você não pode clonar sua própria lista.", 400));
 
-        const newListId = `${data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString().slice(-6)}`;
-        
-        const newListData = {
-            id: newListId,
-            userId: uid,
-            name: `${data.name}`,
-            description: data.description || '',
-            items: data.items || [],
-            isPublic: true,
-            clonedFrom: { 
-                listId: originalListId, 
-                owner: ownerUsername,
-                originalName: data.name 
-            },
-            savesCount: 0,
-            createdAt: new Date(),
-            updatedAt: new Date()
-        };
+  const originalListRef = db
+    .collection("users")
+    .doc(ownerId)
+    .collection("lists")
+    .doc(originalListId);
+  const originalDoc = await originalListRef.get();
 
-        const batch = db.batch();
-        batch.set(db.collection('users').doc(uid).collection('lists').doc(newListId), newListData);
-        batch.update(originalListRef, {
-            savesCount: admin.firestore.FieldValue.increment(1)
-        });
+  if (!originalDoc.exists)
+    return next(new AppError("Lista não encontrada.", 404));
+  const data = originalDoc.data();
+  if (!data.isPublic) return next(new AppError("Lista privada.", 403));
 
-        await batch.commit();
+  const newListId = `${data.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now().toString().slice(-6)}`;
+  const newListData = {
+    id: newListId,
+    userId: uid,
+    name: `${data.name}`,
+    description: data.description || "",
+    items: data.items || [],
+    isPublic: true,
+    clonedFrom: {
+      listId: originalListId,
+      owner: ownerUsername,
+      originalName: data.name,
+    },
+    savesCount: 0,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 
-        res.status(200).json({ message: 'Lista salva na sua coleção!', newListId });
-    } catch (error) { 
-        res.status(500).json({ message: 'Erro ao clonar.' }); 
-    }
-};
+  const batch = db.batch();
+  batch.set(
+    db.collection("users").doc(uid).collection("lists").doc(newListId),
+    newListData,
+  );
+  batch.update(originalListRef, {
+    savesCount: admin.firestore.FieldValue.increment(1),
+  });
+  await batch.commit();
 
-const addMediaToList = async (req, res) => {
-    const { uid } = req.user;
-    const { listId, mediaItem } = req.body;
+  res.status(200).json({ message: "Lista salva na sua coleção!", newListId });
+});
 
-    try {
-        const listRef = db.collection('users').doc(uid).collection('lists').doc(listId);
-        const doc = await listRef.get();
-        
-        if(!doc.exists) return res.status(404).json({message: 'Lista não existe.'});
+exports.addMediaToList = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { listId, mediaItem } = req.body;
 
-        const currentItems = doc.data().items || [];
-        const exists = currentItems.some(i => i.id.toString() === mediaItem.id.toString());
-        
-        if(!exists) {
-            await listRef.update({
-                items: admin.firestore.FieldValue.arrayUnion({ ...mediaItem, addedAt: new Date() }),
-                updatedAt: new Date()
-            });
-        }
-        res.status(200).json({ message: 'Adicionado.' });
-    } catch (error) { 
-        res.status(500).json({ message: 'Erro ao adicionar item.' }); 
-    }
-};
+  const listRef = db
+    .collection("users")
+    .doc(uid)
+    .collection("lists")
+    .doc(listId);
+  const doc = await listRef.get();
+  if (!doc.exists)
+    return next(
+      new AppError("Lista não existe ou você não tem permissão.", 404),
+    );
 
-const getUserLists = async (req, res) => {
-    const { username } = req.params;
-    const { uid: requestUid } = req.user || {}; 
+  const safeMediaItem = {
+    id: mediaItem.id,
+    title: mediaItem.title || "Sem título",
+    poster_path: mediaItem.poster_path || null,
+    backdrop_path: mediaItem.backdrop_path || null,
+    media_type: mediaItem.media_type || "movie",
+    vote_average: mediaItem.vote_average || 0,
+    addedAt: new Date(),
+  };
 
-    try {
-        let targetUid;
+  const currentItems = doc.data().items || [];
+  const exists = currentItems.some(
+    (i) => i.id.toString() === safeMediaItem.id.toString(),
+  );
 
-        if (username === 'me') {
-            if (!requestUid) return res.status(401).json({ message: 'Não autenticado.' });
-            targetUid = requestUid;
-        } else {
-            const userQuery = await db.collection('users').where('username', '==', username).get();
-            if(userQuery.empty) return res.status(404).json([]);
-            targetUid = userQuery.docs[0].id;
-        }
+  if (!exists) {
+    await listRef.update({
+      items: admin.firestore.FieldValue.arrayUnion(safeMediaItem),
+      updatedAt: new Date(),
+    });
+  }
+  res.status(200).json({ message: "Adicionado." });
+});
 
-        const snapshot = await db.collection('users').doc(targetUid).collection('lists').get();
-        
-        let lists = snapshot.docs.map(doc => {
-            const data = doc.data();
-            return {
-                id: doc.id,
-                ...data,
-                savesCount: data.savesCount || 0,
-                createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
-                updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt
-            };
-        });
+exports.getUserLists = catchAsync(async (req, res, next) => {
+  const { username } = req.params;
+  const { uid: requestUid } = req.user || {};
 
-        if (requestUid !== targetUid) {
-            lists = lists.filter(l => l.isPublic);
-        }
+  let targetUid;
+  let isOwner = false;
 
-        lists.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  if (username === "me") {
+    if (!requestUid) return next(new AppError("Não autenticado.", 401));
+    targetUid = requestUid;
+    isOwner = true;
+  } else {
+    const userQuery = await db
+      .collection("users")
+      .where("username", "==", username)
+      .get();
+    if (userQuery.empty)
+      return next(new AppError("Usuário não encontrado", 404));
+    targetUid = userQuery.docs[0].id;
+    isOwner = requestUid === targetUid;
+  }
 
-        res.status(200).json(lists);
-    } catch (error) { 
-        res.status(500).json({ message: 'Erro ao buscar listas.' }); 
-    }
-};
+  let query = db.collection("users").doc(targetUid).collection("lists");
+  if (!isOwner) query = query.where("isPublic", "==", true);
 
-const getPublicListDetails = async (req, res) => {
-    const { username, listId } = req.params;
-    
-    try {
-        const userQuery = await db.collection('users').where('username', '==', username).limit(1).get();
-        
-        if (userQuery.empty) {
-            return res.status(404).json({ message: "Usuário não encontrado." });
-        }
+  const snapshot = await query.get();
+  let lists = snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      name: data.name,
+      description: data.description || "",
+      items: data.items || [],
+      savesCount: data.savesCount || 0,
+      isPublic: data.isPublic,
+      createdAt: data.createdAt?.toDate
+        ? data.createdAt.toDate()
+        : data.createdAt,
+      updatedAt: data.updatedAt?.toDate
+        ? data.updatedAt.toDate()
+        : data.updatedAt,
+    };
+  });
 
-        const userId = userQuery.docs[0].id;
-        const ownerData = userQuery.docs[0].data();
+  lists.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  res.status(200).json(lists);
+});
 
-        const listDoc = await db.collection('users').doc(userId).collection('lists').doc(listId).get();
-        
-        if (!listDoc.exists) {
-            return res.status(404).json({ message: "Lista não encontrada." });
-        }
+exports.getPublicListDetails = catchAsync(async (req, res, next) => {
+  const { username, listId } = req.params;
+  const userQuery = await db
+    .collection("users")
+    .where("username", "==", username)
+    .limit(1)
+    .get();
+  if (userQuery.empty)
+    return next(new AppError("Usuário não encontrado.", 404));
 
-        const listData = listDoc.data();
+  const userId = userQuery.docs[0].id;
+  const ownerData = userQuery.docs[0].data();
+  const listDoc = await db
+    .collection("users")
+    .doc(userId)
+    .collection("lists")
+    .doc(listId)
+    .get();
+  if (!listDoc.exists) return next(new AppError("Lista não encontrada.", 404));
 
-        if (!listData.isPublic) {
-             return res.status(403).json({ message: "Esta lista é privada." });
-        }
+  const listData = listDoc.data();
+  if (!listData.isPublic)
+    return next(new AppError("Esta lista é privada.", 403));
 
-        res.status(200).json({
-            ...listData,
-            userId: userId, 
-            savesCount: listData.savesCount || 0,
-            createdAt: listData.createdAt?.toDate ? listData.createdAt.toDate() : listData.createdAt,
-            updatedAt: listData.updatedAt?.toDate ? listData.updatedAt.toDate() : listData.updatedAt,
-            owner: {
-                username: ownerData.username,
-                photoURL: ownerData.photoURL || null,
-                name: ownerData.name
-            }
-        });
+  res.status(200).json({
+    id: listId,
+    name: listData.name,
+    description: listData.description || "",
+    items: listData.items || [],
+    savesCount: listData.savesCount || 0,
+    isPublic: listData.isPublic,
+    createdAt: listData.createdAt?.toDate
+      ? listData.createdAt.toDate()
+      : listData.createdAt,
+    updatedAt: listData.updatedAt?.toDate
+      ? listData.updatedAt.toDate()
+      : listData.updatedAt,
+    owner: {
+      username: ownerData.username,
+      photoURL: ownerData.photoURL || null,
+      name: ownerData.name,
+    },
+  });
+});
 
-    } catch (error) {
-        res.status(500).json({ message: "Erro ao carregar lista." });
-    }
-};
+exports.deleteList = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { listId } = req.params;
+  const ref = db.collection("users").doc(uid).collection("lists").doc(listId);
+  const doc = await ref.get();
 
-const deleteList = async (req, res) => {
-    const { uid } = req.user;
-    const { listId } = req.params;
-    try {
-        await db.collection('users').doc(uid).collection('lists').doc(listId).delete();
-        res.status(200).json({ message: 'Lista deletada.' });
-    } catch (error) { res.status(500).json({ message: 'Erro.' }); }
-};
+  if (!doc.exists) return next(new AppError("Lista não encontrada.", 404));
 
-const removeMediaFromList = async (req, res) => {
-    const { uid } = req.user;
-    const { listId, mediaId } = req.params;
+  await ref.delete();
+  res.status(200).json({ message: "Lista deletada." });
+});
 
-    try {
-        const listRef = db.collection('users').doc(uid).collection('lists').doc(listId);
-        const doc = await listRef.get();
-        if (!doc.exists) return res.status(404).json({ message: 'Lista não encontrada.' });
+exports.removeMediaFromList = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { listId, mediaId } = req.params;
+  const listRef = db
+    .collection("users")
+    .doc(uid)
+    .collection("lists")
+    .doc(listId);
+  const doc = await listRef.get();
+  if (!doc.exists) return next(new AppError("Lista não encontrada.", 404));
 
-        const currentItems = doc.data().items || [];
-        const updatedItems = currentItems.filter(item => item.id.toString() !== mediaId.toString());
+  const currentItems = doc.data().items || [];
+  const updatedItems = currentItems.filter(
+    (item) => item.id.toString() !== mediaId.toString(),
+  );
 
-        await listRef.update({ items: updatedItems, updatedAt: new Date() });
-        res.status(200).json({ message: 'Removido.' });
-    } catch (error) { res.status(500).json({ message: 'Erro.' }); }
-};
+  await listRef.update({ items: updatedItems, updatedAt: new Date() });
+  res.status(200).json({ message: "Removido." });
+});
 
-const shareList = async (req, res) => {
-    const { uid } = req.user;
-    const { listId, content } = req.body;
-  
-    try {
-      const listDoc = await db.collection('users').doc(uid).collection('lists').doc(listId).get();
-      
-      if (!listDoc.exists) {
-          return res.status(404).json({ message: "Lista não encontrada." });
-      }
-      const listData = listDoc.data();
-      
-      if (!listData.isPublic) {
-          return res.status(400).json({ message: "Você só pode compartilhar listas públicas." });
-      }
-  
-      const userDoc = await db.collection('users').doc(uid).get();
-      const userData = userDoc.data();
-  
-      const newShare = {
-        userId: uid,
-        username: userData.username,
-        userPhoto: userData.photoURL || null,
-        levelTitle: userData.levelTitle || 'Espectador',
-        listId: listId,
-        listName: listData.name, 
-        content: content || `Confira minha nova coleção: ${listData.name}`,
-        type: 'list_share', 
-        createdAt: new Date(),
-        likesCount: 0,
-        commentsCount: 0
-      };
-  
-      const docRef = await db.collection('shared_lists').add(newShare);
-      res.status(201).json({ id: docRef.id, message: "Coleção compartilhada com sucesso!" });
-    } catch (error) {
-      res.status(500).json({ message: "Erro ao compartilhar coleção." });
-    }
-};
+exports.shareList = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { listId, content } = req.body;
 
-module.exports = { 
-    upsertList, 
-    cloneList, 
-    addMediaToList, 
-    getUserLists, 
-    deleteList, 
-    removeMediaFromList,
-    getPublicListDetails,
-    shareList
-};
+  const listDoc = await db
+    .collection("users")
+    .doc(uid)
+    .collection("lists")
+    .doc(listId)
+    .get();
+  if (!listDoc.exists) return next(new AppError("Lista não encontrada.", 404));
+
+  const listData = listDoc.data();
+  if (!listData.isPublic)
+    return next(
+      new AppError("Você só pode compartilhar listas públicas.", 400),
+    );
+
+  const userDoc = await db.collection("users").doc(uid).get();
+  const userData = userDoc.data();
+
+  const newShare = {
+    userId: uid,
+    username: userData.username,
+    userPhoto: userData.photoURL || null,
+    levelTitle: userData.levelTitle || "Espectador",
+    listId: listId,
+    listName: listData.name,
+    content: content || `Confira minha nova coleção: ${listData.name}`,
+    type: "list_share",
+    createdAt: new Date(),
+    likesCount: 0,
+    commentsCount: 0,
+  };
+
+  const docRef = await db.collection("shared_lists").add(newShare);
+  res
+    .status(201)
+    .json({ id: docRef.id, message: "Coleção compartilhada com sucesso!" });
+});

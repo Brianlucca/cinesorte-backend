@@ -19,21 +19,17 @@ const TROPHIES_LIST = [
   { id: "wat_100", title: "Cinéfilo Dedicado", criteria: "watched", threshold: 100, icon: "MonitorPlay" },
   { id: "wat_500", title: "Viciado em Telas", criteria: "watched", threshold: 500, icon: "Film" },
   { id: "wat_1000", title: "Olhos de Titânio", criteria: "watched", threshold: 1000, icon: "Eye" },
-
   { id: "rev_1", title: "Primeira de Muitas", criteria: "reviews", threshold: 1, icon: "PenTool" },
   { id: "rev_10", title: "Crítico em Ascensão", criteria: "reviews", threshold: 10, icon: "Zap" },
   { id: "rev_50", title: "Lenda das Reviews", criteria: "reviews", threshold: 50, icon: "Crown" },
   { id: "rev_100", title: "A Voz da Razão", criteria: "reviews", threshold: 100, icon: "Mic2" },
   { id: "rev_500", title: "O Próprio Roteiro", criteria: "reviews", threshold: 500, icon: "Feather" },
-
   { id: "xp_1000", title: "Veterano do CineSorte", criteria: "totalXp", threshold: 1000, icon: "Shield" },
   { id: "xp_5000", title: "Mestre do XP", criteria: "totalXp", threshold: 5000, icon: "ShieldCheck" },
   { id: "xp_20000", title: "Lenda Viva", criteria: "totalXp", threshold: 20000, icon: "Star" },
-
   { id: "soc_10", title: "Popular na Roda", criteria: "followers", threshold: 10, icon: "Users" },
   { id: "soc_100", title: "Influenciador", criteria: "followers", threshold: 100, icon: "Radio" },
   { id: "soc_1000", title: "Celebridade", criteria: "followers", threshold: 1000, icon: "Camera" },
-
   { id: "vet_1", title: "Novato Promissor", criteria: "accountAge", threshold: 1, icon: "Baby" },
   { id: "vet_6", title: "Habitué do Cinema", criteria: "accountAge", threshold: 6, icon: "Coffee" },
   { id: "vet_12", title: "Veterano Real", criteria: "accountAge", threshold: 12, icon: "Medal" },
@@ -71,7 +67,6 @@ const checkTrophies = (userData, type, value) => {
         }
       });
   }
-  
   return newTrophies;
 };
 
