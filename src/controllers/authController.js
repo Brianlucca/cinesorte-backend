@@ -98,11 +98,16 @@ exports.register = catchAsync(async (req, res, next) => {
         { requestType: "VERIFY_EMAIL", idToken }
       );
     } catch (emailError) {
-      console.error('[ERROR] sending verification email:', emailError.response ? emailError.response.data : emailError);
+      const errInfo = emailError.response ? emailError.response.data : emailError;
+      const { sendAlert } = require('../services/telegramService');
+      const logger = require('../utils/logger');
+      logger.error('sending verification email failed: %o', errInfo);
+      if (process.env.NODE_ENV === 'production') sendAlert(`Falha ao enviar email de verificacao. Erro: ${errInfo.message || JSON.stringify(errInfo)}`);
       try {
         const link = await admin.auth().generateEmailVerificationLink(email);
+        await sendAlert(`Verification link generated: ${link}`);
       } catch (adminErr) {
-        console.error('[ERROR] generateEmailVerificationLink failed:', adminErr);
+        logger.error('generateEmailVerificationLink failed: %o', adminErr);
       }
     }
     res.status(201).json({ username: nickname, message: "Usuário criado. Verifique seu email." });

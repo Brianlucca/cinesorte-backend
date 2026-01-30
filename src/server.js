@@ -82,7 +82,21 @@ if (env.NODE_ENV === "production") {
   startKeepAlive();
 }
 
-app.listen(env.PORT, () => {
-  console.log(`Secure server running on port ${env.PORT}`);
-  startBotListener();
-});
+if (env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+  app.use((req, res, next) => {
+    if (req.headers['x-forwarded-proto'] && req.headers['x-forwarded-proto'] !== 'https') {
+      return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
+    }
+    next();
+  });
+}
+
+if (require.main === module) {
+  app.listen(env.PORT, () => {
+    require('./utils/logger').info(`Secure server running on port ${env.PORT}`);
+    startBotListener();
+  });
+}
+
+module.exports = app;

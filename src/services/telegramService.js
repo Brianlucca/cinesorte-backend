@@ -14,7 +14,7 @@ const sendAlert = async (message) => {
       parse_mode: 'Markdown',
     });
   } catch (error) {
-    console.error('Telegram Fail');
+    require('../utils/logger').error('Telegram send failed: %o', error);
   }
 };
 

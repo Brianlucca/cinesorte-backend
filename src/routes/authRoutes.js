@@ -3,12 +3,12 @@ const router = express.Router();
 const authController = require("../controllers/authController");
 const userController = require("../controllers/userController");
 const { verifyToken } = require("../middleware/auth");
-const { authLimiter } = require("../middleware/security");
+const { authLimiter, registerLimiter } = require("../middleware/security");
 const validate = require('../middleware/validate');
 const { registerSchema, profileSchema } = require('../schemas/schemas');
 
 
-router.post("/register", validate(registerSchema), authController.register);
+router.post("/register", registerLimiter, validate(registerSchema), authController.register);
 router.post("/login", authLimiter, authController.login);
 router.post("/logout", authController.logout);
 router.get("/me", verifyToken, authController.getMe);

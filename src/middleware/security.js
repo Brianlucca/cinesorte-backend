@@ -42,6 +42,15 @@ const authLimiter = rateLimit({
   }
 });
 
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // max 5 accounts per hour per IP
+  handler: (req, res) => {
+    if (env.NODE_ENV === 'production') sendAlert(`REGISTER RATE LIMIT: IP ${req.ip} bloqueado.`);
+    res.status(429).json({ message: 'Muitas tentativas de registro. Tente novamente mais tarde.' });
+  }
+});
+
 const shield = (req, res, next) => {
   const userAgent = req.headers['user-agent'] || '';
   const origin = req.headers.origin;
@@ -72,4 +81,4 @@ const sanitizeInput = (req, res, next) => {
   next();
 };
 
-module.exports = { tmdbApiLimiter, authLimiter, sanitizeInput, shield, userSpamDetector };
+module.exports = { tmdbApiLimiter, authLimiter, registerLimiter, sanitizeInput, shield, userSpamDetector };
