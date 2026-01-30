@@ -218,7 +218,14 @@ exports.getUserFollowersList = catchAsync(async (req, res, next) => {
     .json(
       usersDocs
         .filter((doc) => doc.exists)
-        .map((doc) => ({ id: doc.id, ...doc.data() })),
+        .map((doc) => {
+          const d = doc.data();
+          return {
+            username: d.username,
+            userPhoto: d.photoURL || null,
+            levelTitle: d.levelTitle || null,
+          };
+        }),
     );
 });
 
@@ -246,7 +253,14 @@ exports.getUserFollowingList = catchAsync(async (req, res, next) => {
     .json(
       usersDocs
         .filter((doc) => doc.exists)
-        .map((doc) => ({ id: doc.id, ...doc.data() })),
+        .map((doc) => {
+          const d = doc.data();
+          return {
+            username: d.username,
+            userPhoto: d.photoURL || null,
+            levelTitle: d.levelTitle || null,
+          };
+        }),
     );
 });
 
@@ -271,7 +285,12 @@ exports.getSuggestions = catchAsync(async (req, res, next) => {
     .map((doc) => {
       const data = doc.data();
       let score = (topGenre && data.genreCounts?.[topGenre]) || 0;
-      return { id: doc.id, ...data, score };
+      return {
+        username: data.username,
+        userPhoto: data.photoURL || null,
+        levelTitle: data.levelTitle || null,
+        score,
+      };
     });
   suggestions.sort((a, b) => b.score - a.score);
   res.status(200).json(suggestions.slice(0, 5));

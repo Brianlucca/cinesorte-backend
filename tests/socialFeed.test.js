@@ -45,16 +45,10 @@ describe('Social Feed - Public', () => {
     app = require('../src/server');
   });
 
-  test('GET /api/social/feed/global should not expose userId for unauthenticated requests', async () => {
+  test('GET /api/social/feed/global should require authentication', async () => {
     const res = await request(app).get('/api/social/feed/global').set('Origin', 'http://localhost:5173');
-    if (res.status !== 200) console.error('Feed error body:', res.body);
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body.length).toBeGreaterThan(0);
-    const item = res.body[0];
-    expect(item).not.toHaveProperty('userId');
-    expect(item).toHaveProperty('username', 'testuser');
-    expect(item).toHaveProperty('userPhoto', 'https://example.com/photo.jpg');
-    expect(item).toHaveProperty('mediaId', 123);
+    expect(res.status).toBe(401);
+    expect(res.body).toHaveProperty('message');
+    expect(res.body.message).toMatch(/Acesso negado|Sessão inválida/);
   });
 });

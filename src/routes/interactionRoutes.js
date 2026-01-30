@@ -20,7 +20,7 @@ router.get('/diary', verifyToken, interactionController.getWatchDiary);
 router.post('/lists', verifyToken, requireTerms, validate(listSchema), listController.upsertList);
 router.post('/lists/clone', verifyToken, requireTerms, listController.cloneList);
 router.post('/lists/add', verifyToken, validate(addToListSchema), listController.addMediaToList);
-router.get('/lists/:username', optionalVerify, listController.getUserLists);
+router.get('/lists/:username', verifyToken, listController.getUserLists);
 router.delete('/lists/:listId', verifyToken, listController.deleteList);
 router.delete('/lists/:listId/media/:mediaId', verifyToken, listController.removeMediaFromList);
 
