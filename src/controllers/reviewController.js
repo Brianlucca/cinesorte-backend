@@ -399,20 +399,30 @@ exports.getMediaReviews = catchAsync(async (req, res, next) => {
 exports.getUserReviews = catchAsync(async (req, res, next) => {
   const { username } = req.params;
   const { uid } = req.user || {};
+  
   const userQuery = await db
     .collection("users")
     .where("username", "==", username)
+    .limit(1)
     .get();
+
   if (userQuery.empty) return res.status(404).json([]);
 
   const targetUid = userQuery.docs[0].id;
-  const snapshot = await db
-    .collection("reviews")
-    .where("userId", "==", targetUid)
-    .limit(20)
-    .get();
+
+  const [reviewsSnapshot, listsSnapshot] = await Promise.all([
+    db.collection("reviews")
+      .where("userId", "==", targetUid)
+      .limit(20)
+      .get(),
+    db.collection("shared_lists")
+      .where("userId", "==", targetUid)
+      .limit(20)
+      .get()
+  ]);
+
   const reviews = await Promise.all(
-    snapshot.docs.map(async (doc) => {
+    reviewsSnapshot.docs.map(async (doc) => {
       const data = doc.data();
       let isLiked = false;
       if (uid) {
@@ -427,17 +437,57 @@ exports.getUserReviews = catchAsync(async (req, res, next) => {
       return {
         id: doc.id,
         ...data,
+        type: 'review',
         isLikedByCurrentUser: isLiked,
         replies: [],
       };
-    }),
+    })
   );
-  reviews.sort(
+
+  const sharedLists = await Promise.all(
+    listsSnapshot.docs.map(async (doc) => {
+      const data = doc.data();
+      let listItems = [];
+      let listCount = 0;
+      let currentListName = data.listName;
+
+      try {
+        const listDoc = await db
+          .collection("users")
+          .doc(data.userId)
+          .collection("lists")
+          .doc(data.listId)
+          .get();
+        
+        if (listDoc.exists) {
+          const listData = listDoc.data();
+          currentListName = listData.name;
+          listCount = listData.items?.length || 0;
+          listItems = listData.items?.slice(0, 4) || [];
+        }
+      } catch (e) {}
+
+      return {
+        id: doc.id,
+        ...data,
+        type: 'list_share',
+        listName: currentListName,
+        listCount,
+        listItems,
+        attachmentId: data.listId,
+      };
+    })
+  );
+
+  const feed = [...reviews, ...sharedLists];
+  
+  feed.sort(
     (a, b) =>
       (b.createdAt?.toDate?.() || new Date(b.createdAt)) -
-      (a.createdAt?.toDate?.() || new Date(a.createdAt)),
+      (a.createdAt?.toDate?.() || new Date(a.createdAt))
   );
-  res.status(200).json(reviews);
+
+  res.status(200).json(feed);
 });
 
 exports.getComments = catchAsync(async (req, res, next) => {

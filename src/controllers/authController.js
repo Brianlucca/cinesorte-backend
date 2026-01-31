@@ -176,6 +176,7 @@ exports.getMe = catchAsync(async (req, res, next) => {
     email: d.email, 
     photoURL: d.photoURL,
     backgroundURL: d.backgroundURL,
+    bio: d.bio,
     level: d.level,
     levelTitle: d.levelTitle,
     xp: d.xp,

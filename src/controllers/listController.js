@@ -300,6 +300,7 @@ exports.shareList = catchAsync(async (req, res, next) => {
     levelTitle: userData.levelTitle || "Espectador",
     listId: listId,
     listName: listData.name,
+    listItems: listData.items || [],
     content: content || `Confira minha nova coleção: ${listData.name}`,
     type: "list_share",
     createdAt: new Date(),
