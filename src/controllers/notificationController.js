@@ -18,7 +18,21 @@ exports.getNotifications = catchAsync(async (req, res, next) => {
     } else {
       createdDate = new Date();
     }
-    return { id: doc.id, ...data, createdAt: createdDate };
+
+    return {
+      id: doc.id,
+      type: data.type,
+      title: data.title,
+      message: data.message,
+      read: data.read || false,
+      createdAt: createdDate,
+      icon: data.icon || null,
+      mediaId: data.mediaId || null,
+      mediaType: data.mediaType || null,
+      senderName: data.senderName || null,
+      senderUsername: data.senderUsername || null,
+      senderPhoto: data.senderPhoto || null,
+    };
   });
 
   notifications.sort((a, b) => b.createdAt - a.createdAt);
