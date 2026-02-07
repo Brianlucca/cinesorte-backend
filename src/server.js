@@ -60,6 +60,7 @@ app.use(userSpamDetector);
 app.use(sanitizeInput);
 
 app.get("/", (req, res) => res.json({ message: "Cinesorte Secure API" }));
+app.get("/api/health", (req, res) => res.sendStatus(200));
 
 app.use("/api/tmdb", tmdbApiLimiter, tmdbRoutes);
 app.use("/api/users", authRoutes);

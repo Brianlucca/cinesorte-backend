@@ -4,10 +4,10 @@ const env = require('../config/env');
 const startKeepAlive = () => {
   setInterval(async () => {
     try {
-      await axios.get(`${env.FRONTEND_URL}/api/health`);
+      await axios.get(`${env.BACKEND_URL}/api/health`);
     } catch (error) {
     }
-  }, 14 * 60 * 1000);
+  }, 10 * 60 * 1000); // 10 minutos
 };
 
 module.exports = { startKeepAlive };
