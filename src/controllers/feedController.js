@@ -3,7 +3,15 @@ const catchAsync = require("../utils/catchAsync");
 
 exports.getGlobalFeed = catchAsync(async (req, res, next) => {
   const { uid } = req.user || {};
-  let query = db.collection("reviews").orderBy("createdAt", "desc").limit(20);
+  const page = parseInt(req.query.page) || 1;
+  const limit = 20;
+  const offset = (page - 1) * limit;
+
+  let query = db.collection("reviews")
+    .orderBy("createdAt", "desc")
+    .limit(limit)
+    .offset(offset);
+
   const snapshot = await query.get();
   const feed = await Promise.all(
     snapshot.docs.map(async (doc) => {
@@ -46,6 +54,9 @@ exports.getGlobalFeed = catchAsync(async (req, res, next) => {
 
 exports.getFollowingFeed = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
+  const page = parseInt(req.query.page) || 1;
+  const limit = 20;
+  const offset = (page - 1) * limit;
   
   const followingSnap = await db
     .collection("users")
@@ -61,16 +72,16 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
 
   if (followingIds.length === 0) return res.status(200).json([]);
 
-  const activeIds = followingIds.slice(0, 10);
+  const activeIds = followingIds.slice(0, 30);
 
   const [reviewsSnapshot, listsSnapshot] = await Promise.all([
     db.collection("reviews")
       .where("userId", "in", activeIds)
-      .limit(20)
+      .limit(100) 
       .get(),
     db.collection("shared_lists")
       .where("userId", "in", activeIds)
-      .limit(20)
+      .limit(100)
       .get()
   ]);
 
@@ -160,16 +171,22 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
       (a.createdAt?.toDate?.() || new Date(a.createdAt))
   );
 
-  res.status(200).json(feed);
+  const paginatedFeed = feed.slice(offset, offset + limit);
+
+  res.status(200).json(paginatedFeed);
 });
 
 exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = 20;
+  const offset = (page - 1) * limit;
+
   const snapshot = await db
     .collection("shared_lists")
-    .orderBy("createdAt", "desc")
-    .limit(20)
+    .limit(100)
     .get();
-  const feed = await Promise.all(
+
+  const allLists = await Promise.all(
     snapshot.docs.map(async (doc) => {
       const data = doc.data();
       let listItems = [];
@@ -204,5 +221,13 @@ exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
       };
     }),
   );
-  res.status(200).json(feed);
+
+  allLists.sort(
+    (a, b) =>
+      (b.createdAt?.toDate?.() || new Date(b.createdAt)) -
+      (a.createdAt?.toDate?.() || new Date(a.createdAt))
+  );
+
+  const paginatedFeed = allLists.slice(offset, offset + limit);
+  res.status(200).json(paginatedFeed);
 });
