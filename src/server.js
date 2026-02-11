@@ -76,7 +76,7 @@ app.use((req, res, next) => {
       message: `Rota ${req.originalUrl} nao encontrada.`,
     });
 });
-
+// Teste
 app.use(errorHandler);
 
 if (env.NODE_ENV === "production") {
