@@ -10,7 +10,6 @@ const {
   userSpamDetector,
   tmdbApiLimiter,
 } = require("./middleware/security");
-const { startKeepAlive } = require("./services/keepAliveService");
 const { startBotListener } = require("./services/telegramService");
 
 const tmdbRoutes = require("./routes/tmdbRoutes");
@@ -68,25 +67,22 @@ app.use("/api/users", interactionRoutes);
 app.use("/api/social", socialRoutes);
 app.use("/api/notifications", notificationRoutes);
 
-app.use((req, res, next) => {
-  res
-    .status(404)
-    .json({
-      status: "fail",
-      message: `Rota ${req.originalUrl} nao encontrada.`,
-    });
+app.use((req, res) => {
+  res.status(404).json({
+    status: "fail",
+    message: `Rota ${req.originalUrl} nao encontrada.`,
+  });
 });
-// Teste
+
 app.use(errorHandler);
 
 if (env.NODE_ENV === "production") {
-  startKeepAlive();
-}
-
-if (env.NODE_ENV === 'production') {
-  app.set('trust proxy', 1);
+  app.set("trust proxy", 1);
   app.use((req, res, next) => {
-    if (req.headers['x-forwarded-proto'] && req.headers['x-forwarded-proto'] !== 'https') {
+    if (
+      req.headers["x-forwarded-proto"] &&
+      req.headers["x-forwarded-proto"] !== "https"
+    ) {
       return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
     }
     next();
@@ -95,7 +91,9 @@ if (env.NODE_ENV === 'production') {
 
 if (require.main === module) {
   app.listen(env.PORT, () => {
-    require('./utils/logger').info(`Secure server running on port ${env.PORT}`);
+    require("./utils/logger").info(
+      `Secure server running on port ${env.PORT}`
+    );
     startBotListener();
   });
 }
