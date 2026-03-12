@@ -17,6 +17,7 @@ const interactionRoutes = require("./routes/interactionRoutes");
 const socialRoutes = require("./routes/socialRoutes");
 const authRoutes = require("./routes/authRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
+const oscarRoutes = require("./routes/oscarRoutes");
 
 const app = express();
 
@@ -66,6 +67,7 @@ app.use("/api/users", authRoutes);
 app.use("/api/users", interactionRoutes);
 app.use("/api/social", socialRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/oscars", oscarRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

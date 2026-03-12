@@ -29,7 +29,7 @@ const userSpamDetector = (req, res, next) => {
 
 const tmdbApiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 100,
+  max: 200,
   message: { message: 'Muitas requisicoes.' }
 });
 
