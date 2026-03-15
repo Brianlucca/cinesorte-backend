@@ -2,7 +2,7 @@ const { db, admin } = require('../config/firebase');
 const catchAsync = require('../utils/catchAsync');
 const AppError = require('../utils/AppError');
 
-const OSCAR_DEADLINE = new Date('2026-03-16T00:00:00-03:00');
+const OSCAR_DEADLINE = new Date('2026-03-16T00:03:00-03:00');
 
 exports.submitVote = catchAsync(async (req, res, next) => {
   if (new Date() >= OSCAR_DEADLINE) {
