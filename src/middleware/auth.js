@@ -7,28 +7,28 @@ const verifyToken = catchAsync(async (req, res, next) => {
   if (!sessionCookie) return next(new AppError('Acesso negado. Faça login.', 401));
 
   try {
-    const decodedClaims = await auth.verifySessionCookie(sessionCookie, true);
+    const decodedClaims = await auth.verifySessionCookie(sessionCookie, false);
     if (!decodedClaims.email_verified) return next(new AppError('Verifique seu email.', 403));
-    
+
     const userDoc = await db.collection("users").doc(decodedClaims.uid).get();
     if (!userDoc.exists) return next(new AppError('Usuário não encontrado.', 404));
 
     const userData = userDoc.data();
-    req.user = { 
-        uid: decodedClaims.uid, 
-        email: decodedClaims.email,
-        username: userData.username,
-        photoURL: userData.photoURL,
-        role: userData.role,
-        termsVersion: userData.termsVersion
+    req.user = {
+      uid: decodedClaims.uid,
+      email: decodedClaims.email,
+      username: userData.username,
+      photoURL: userData.photoURL,
+      role: userData.role,
+      termsVersion: userData.termsVersion
     };
     next();
   } catch (error) {
-    res.clearCookie("authToken");
+    console.log('Cookie error:', error.code, error.message);
+    res.clearCookie("authToken", cookieOptions);
     return next(new AppError('Sessão inválida.', 401));
   }
 });
-
 const optionalVerify = catchAsync(async (req, res, next) => {
   const sessionCookie = req.cookies.authToken;
   if (sessionCookie) {
