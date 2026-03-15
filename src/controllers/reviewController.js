@@ -51,19 +51,16 @@ exports.addReview = catchAsync(async (req, res, next) => {
     const updates = {
       reviewsCount: admin.firestore.FieldValue.increment(1),
       xp: currentXp,
-      totalXp: totalXp,
-      level: level,
+      totalXp,
+      level,
       levelTitle: calculateLevelTitle(reviewsCount),
     };
 
     if (finalTrophies.length > 0) {
-      updates.trophies = admin.firestore.FieldValue.arrayUnion(
-        ...finalTrophies,
-      );
+      updates.trophies = admin.firestore.FieldValue.arrayUnion(...finalTrophies);
     }
 
     const reviewRef = db.collection("reviews").doc();
-    
     const isElite = isEliteReview === true || isEliteReview === "true";
 
     const reviewPayload = {
@@ -88,8 +85,7 @@ exports.addReview = catchAsync(async (req, res, next) => {
     t.set(reviewRef, reviewPayload);
     t.update(userRef, updates);
 
-    if (level > initialLevel)
-      levelUpInfo = { level, title: updates.levelTitle };
+    if (level > initialLevel) levelUpInfo = { level, title: updates.levelTitle };
 
     if (mediaType !== "person") {
       try {
@@ -162,12 +158,11 @@ exports.deleteReview = catchAsync(async (req, res, next) => {
   const reviewRef = db.collection("reviews").doc(reviewId);
   const doc = await reviewRef.get();
   if (!doc.exists) return next(new AppError("Não encontrada.", 404));
-  if (doc.data().userId !== uid)
-    return next(new AppError("Sem permissão.", 403));
+  if (doc.data().userId !== uid) return next(new AppError("Sem permissão.", 403));
 
   const batch = db.batch();
   batch.delete(reviewRef);
-  
+
   const historySnapshot = await reviewRef.collection("history").get();
   historySnapshot.forEach(doc => batch.delete(doc.ref));
 
@@ -176,7 +171,7 @@ exports.deleteReview = catchAsync(async (req, res, next) => {
     .where("reviewId", "==", reviewId)
     .get();
   commentsSnapshot.forEach((doc) => batch.delete(doc.ref));
-  
+
   await batch.commit();
   res.status(200).json({ message: "Review deletada." });
 });
@@ -229,8 +224,7 @@ exports.toggleLikeReview = catchAsync(async (req, res, next) => {
     }
   });
 
-  if (notificationData)
-    await db.collection("notifications").add(notificationData);
+  if (notificationData) await db.collection("notifications").add(notificationData);
   res.status(200).json({ message: "Sucesso" });
 });
 
@@ -240,13 +234,16 @@ exports.addComment = catchAsync(async (req, res, next) => {
   if (containsProfanity(text))
     return next(new AppError("Conteúdo impróprio.", 400));
 
-  const userDoc = await db.collection("users").doc(uid).get();
-  const userData = userDoc.data() || {};
-  const reviewDoc = await db.collection("reviews").doc(reviewId).get();
-  if (!reviewDoc.exists)
-    return next(new AppError("Review não encontrada.", 404));
+  const [userDoc, reviewDoc] = await Promise.all([
+    db.collection("users").doc(uid).get(),
+    db.collection("reviews").doc(reviewId).get()
+  ]);
 
+  if (!reviewDoc.exists) return next(new AppError("Review não encontrada.", 404));
+
+  const userData = userDoc.data() || {};
   const reviewData = reviewDoc.data();
+
   const commentData = {
     reviewId,
     userId: uid,
@@ -284,7 +281,17 @@ exports.addComment = catchAsync(async (req, res, next) => {
       icon: "MessageCircle",
     });
   }
-  res.status(201).json({ id: commentRef.id, ...commentData });
+  res.status(201).json({
+    id: commentRef.id,
+    reviewId: commentData.reviewId,
+    username: commentData.username,
+    userPhoto: commentData.userPhoto,
+    text: commentData.text,
+    parentId: commentData.parentId,
+    createdAt: commentData.createdAt,
+    levelTitle: commentData.levelTitle,
+    isEdited: commentData.isEdited
+  });
 });
 
 exports.updateComment = catchAsync(async (req, res, next) => {
@@ -331,7 +338,7 @@ exports.deleteComment = catchAsync(async (req, res, next) => {
   if (doc.data().userId !== uid) return next(new AppError("Proibido.", 403));
 
   const batch = db.batch();
-  
+
   const historySnapshot = await ref.collection("history").get();
   historySnapshot.forEach(hDoc => batch.delete(hDoc.ref));
 
@@ -345,53 +352,52 @@ exports.deleteComment = catchAsync(async (req, res, next) => {
 
 exports.getMediaReviews = catchAsync(async (req, res, next) => {
   const { mediaId } = req.params;
-  const { uid } = req.user; 
+  const { uid } = req.user;
 
   const snapshot = await db
     .collection("reviews")
     .where("mediaId", "==", mediaId)
+    .orderBy("createdAt", "desc")
+    .limit(50)
     .get();
 
-  const reviews = await Promise.all(
-    snapshot.docs.map(async (doc) => {
-      const data = doc.data();
-      
-      const likeSnap = await db
-        .collection("reviews")
-        .doc(doc.id)
-        .collection("likes")
-        .doc(uid)
-        .get();
+  const reviewIds = snapshot.docs.map(d => d.id);
+  let likedIds = new Set();
 
-      const reviewObj = {
-        id: doc.id,
-        mediaId: data.mediaId,
-        mediaType: data.mediaType,
-        mediaTitle: data.mediaTitle,
-        posterPath: data.posterPath,
-        backdropPath: data.backdropPath,
-        rating: data.rating,
-        text: data.text,
-        likesCount: data.likesCount,
-        commentsCount: data.commentsCount,
-        createdAt: data.createdAt,
-        username: data.username,
-        userPhoto: data.userPhoto,
-        levelTitle: data.levelTitle,
-        isEliteReview: data.isEliteReview,
-        isEdited: data.isEdited,
-        isLikedByCurrentUser: likeSnap.exists,
-        replies: []
-      };
+  if (uid && reviewIds.length > 0) {
+    const likeChecks = await Promise.all(
+      reviewIds.map(id =>
+        db.collection("reviews").doc(id).collection("likes").doc(uid).get()
+      )
+    );
+    likeChecks.forEach((snap, i) => {
+      if (snap.exists) likedIds.add(reviewIds[i]);
+    });
+  }
 
-      return reviewObj;
-    })
-  );
-
-  reviews.sort((a, b) => 
-    (b.createdAt?.toDate?.() || new Date(b.createdAt)) - 
-    (a.createdAt?.toDate?.() || new Date(a.createdAt))
-  );
+  const reviews = snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      mediaId: data.mediaId,
+      mediaType: data.mediaType,
+      mediaTitle: data.mediaTitle,
+      posterPath: data.posterPath,
+      backdropPath: data.backdropPath,
+      rating: data.rating,
+      text: data.text,
+      likesCount: data.likesCount,
+      commentsCount: data.commentsCount,
+      createdAt: data.createdAt,
+      username: data.username,
+      userPhoto: data.userPhoto,
+      levelTitle: data.levelTitle,
+      isEliteReview: data.isEliteReview,
+      isEdited: data.isEdited,
+      isLikedByCurrentUser: likedIds.has(doc.id),
+      replies: []
+    };
+  });
 
   res.status(200).json(reviews);
 });
@@ -399,7 +405,7 @@ exports.getMediaReviews = catchAsync(async (req, res, next) => {
 exports.getUserReviews = catchAsync(async (req, res, next) => {
   const { username } = req.params;
   const { uid } = req.user || {};
-  
+
   const userQuery = await db
     .collection("users")
     .where("username", "==", username)
@@ -413,74 +419,91 @@ exports.getUserReviews = catchAsync(async (req, res, next) => {
   const [reviewsSnapshot, listsSnapshot] = await Promise.all([
     db.collection("reviews")
       .where("userId", "==", targetUid)
+      .orderBy("createdAt", "desc")
       .limit(20)
       .get(),
     db.collection("shared_lists")
       .where("userId", "==", targetUid)
+      .orderBy("createdAt", "desc")
       .limit(20)
       .get()
   ]);
 
-  const reviews = await Promise.all(
-    reviewsSnapshot.docs.map(async (doc) => {
-      const data = doc.data();
-      let isLiked = false;
-      if (uid) {
-        const likeSnap = await db
-          .collection("reviews")
-          .doc(doc.id)
-          .collection("likes")
-          .doc(uid)
-          .get();
-        isLiked = likeSnap.exists;
-      }
-      return {
-        id: doc.id,
-        ...data,
-        type: 'review',
-        isLikedByCurrentUser: isLiked,
-        replies: [],
-      };
-    })
-  );
+  const reviewIds = reviewsSnapshot.docs.map(d => d.id);
+  let likedIds = new Set();
 
-  const sharedLists = await Promise.all(
-    listsSnapshot.docs.map(async (doc) => {
-      const data = doc.data();
-      let listItems = [];
-      let listCount = 0;
-      let currentListName = data.listName;
+  if (uid && reviewIds.length > 0) {
+    const likeChecks = await Promise.all(
+      reviewIds.map(id =>
+        db.collection("reviews").doc(id).collection("likes").doc(uid).get()
+      )
+    );
+    likeChecks.forEach((snap, i) => {
+      if (snap.exists) likedIds.add(reviewIds[i]);
+    });
+  }
 
-      try {
-        const listDoc = await db
-          .collection("users")
-          .doc(data.userId)
-          .collection("lists")
-          .doc(data.listId)
-          .get();
-        
-        if (listDoc.exists) {
-          const listData = listDoc.data();
-          currentListName = listData.name;
-          listCount = listData.items?.length || 0;
-          listItems = listData.items?.slice(0, 4) || [];
-        }
-      } catch (e) {}
+  const reviews = reviewsSnapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      mediaId: data.mediaId,
+      mediaType: data.mediaType,
+      mediaTitle: data.mediaTitle,
+      posterPath: data.posterPath || null,
+      backdropPath: data.backdropPath || null,
+      rating: data.rating,
+      text: data.text || null,
+      likesCount: data.likesCount || 0,
+      commentsCount: data.commentsCount || 0,
+      createdAt: data.createdAt,
+      username: data.username || 'Usuário',
+      userPhoto: data.userPhoto || null,
+      levelTitle: data.levelTitle || null,
+      isEliteReview: data.isEliteReview || false,
+      isEdited: data.isEdited || false,
+      type: 'review',
+      isLikedByCurrentUser: likedIds.has(doc.id),
+      replies: [],
+    };
+  });
 
-      return {
-        id: doc.id,
-        ...data,
-        type: 'list_share',
-        listName: currentListName,
-        listCount,
-        listItems,
-        attachmentId: data.listId,
-      };
-    })
-  );
+  const listDetailRefs = listsSnapshot.docs.map(doc => {
+    const data = doc.data();
+    return db.collection("users").doc(data.userId).collection("lists").doc(data.listId).get();
+  });
+  const listDetails = await Promise.all(listDetailRefs.map(p => p.catch(() => null)));
+
+  const sharedLists = listsSnapshot.docs.map((doc, i) => {
+    const data = doc.data();
+    const listDoc = listDetails[i];
+    let listItems = [];
+    let listCount = 0;
+    let currentListName = data.listName;
+
+    if (listDoc && listDoc.exists) {
+      const listData = listDoc.data();
+      currentListName = listData.name;
+      listCount = listData.items?.length || 0;
+      listItems = listData.items?.slice(0, 4) || [];
+    }
+
+    return {
+      id: doc.id,
+      username: data.username || 'Usuário',
+      userPhoto: data.userPhoto || null,
+      content: data.content || null,
+      likesCount: data.likesCount || 0,
+      createdAt: data.createdAt,
+      type: 'list_share',
+      listName: currentListName,
+      listCount,
+      listItems,
+      attachmentId: data.listId,
+    };
+  });
 
   const feed = [...reviews, ...sharedLists];
-  
   feed.sort(
     (a, b) =>
       (b.createdAt?.toDate?.() || new Date(b.createdAt)) -
@@ -495,12 +518,24 @@ exports.getComments = catchAsync(async (req, res, next) => {
   const snapshot = await db
     .collection("comments")
     .where("reviewId", "==", reviewId)
+    .orderBy("createdAt", "asc")
+    .limit(100)
     .get();
-  const comments = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-  comments.sort(
-    (a, b) =>
-      (a.createdAt?.toDate?.() || new Date(a.createdAt)) -
-      (b.createdAt?.toDate?.() || new Date(b.createdAt)),
-  );
+
+  const comments = snapshot.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      reviewId: data.reviewId,
+      username: data.username || 'Usuário',
+      userPhoto: data.userPhoto || null,
+      text: data.text,
+      parentId: data.parentId || null,
+      createdAt: data.createdAt,
+      levelTitle: data.levelTitle || null,
+      isEdited: data.isEdited || false,
+    };
+  });
+
   res.status(200).json(comments);
 });
