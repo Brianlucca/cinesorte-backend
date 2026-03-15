@@ -5,50 +5,66 @@ exports.getGlobalFeed = catchAsync(async (req, res, next) => {
   const { uid } = req.user || {};
   const page = parseInt(req.query.page) || 1;
   const limit = 20;
-  const offset = (page - 1) * limit;
 
   let query = db.collection("reviews")
     .orderBy("createdAt", "desc")
-    .limit(limit)
-    .offset(offset);
+    .limit(limit);
+
+  if (page > 1) {
+    const offset = (page - 1) * limit;
+    const countSnap = await db.collection("reviews")
+      .orderBy("createdAt", "desc")
+      .limit(offset)
+      .get();
+    if (!countSnap.empty) {
+      const lastDoc = countSnap.docs[countSnap.docs.length - 1];
+      query = db.collection("reviews")
+        .orderBy("createdAt", "desc")
+        .startAfter(lastDoc)
+        .limit(limit);
+    }
+  }
 
   const snapshot = await query.get();
-  const feed = await Promise.all(
-    snapshot.docs.map(async (doc) => {
-      const data = doc.data();
-      let isLikedByCurrentUser = false;
-      if (uid) {
-        const likeSnap = await db
-          .collection("reviews")
-          .doc(doc.id)
-          .collection("likes")
-          .doc(uid)
-          .get();
-        isLikedByCurrentUser = likeSnap.exists;
-      }
-      return {
-        id: doc.id,
-        mediaId: data.mediaId,
-        mediaType: data.mediaType,
-        mediaTitle: data.mediaTitle,
-        posterPath: data.posterPath || null,
-        backdropPath: data.backdropPath || null,
-        rating: data.rating,
-        text: data.text || null,
-        likesCount: data.likesCount || 0,
-        commentsCount: data.commentsCount || 0,
-        createdAt: data.createdAt,
-        username: data.username || 'Usuário',
-        userPhoto: data.userPhoto || null,
-        levelTitle: data.levelTitle || null,
-        isEliteReview: data.isEliteReview || false,
-        isEdited: data.isEdited || false,
-        isLikedByCurrentUser,
-        replies: [],
-        type: 'review'
-      };
-    }),
-  );
+
+  let likedIds = new Set();
+  if (uid && !snapshot.empty) {
+    const reviewIds = snapshot.docs.map(d => d.id);
+    const likeChecks = await Promise.all(
+      reviewIds.map(id =>
+        db.collection("reviews").doc(id).collection("likes").doc(uid).get()
+      )
+    );
+    likeChecks.forEach((snap, i) => {
+      if (snap.exists) likedIds.add(reviewIds[i]);
+    });
+  }
+
+  const feed = snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      mediaId: data.mediaId,
+      mediaType: data.mediaType,
+      mediaTitle: data.mediaTitle,
+      posterPath: data.posterPath || null,
+      backdropPath: data.backdropPath || null,
+      rating: data.rating,
+      text: data.text || null,
+      likesCount: data.likesCount || 0,
+      commentsCount: data.commentsCount || 0,
+      createdAt: data.createdAt,
+      username: data.username || 'Usuário',
+      userPhoto: data.userPhoto || null,
+      levelTitle: data.levelTitle || null,
+      isEliteReview: data.isEliteReview || false,
+      isEdited: data.isEdited || false,
+      isLikedByCurrentUser: likedIds.has(doc.id),
+      replies: [],
+      type: 'review'
+    };
+  });
+
   res.status(200).json(feed);
 });
 
@@ -57,7 +73,7 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
   const page = parseInt(req.query.page) || 1;
   const limit = 20;
   const offset = (page - 1) * limit;
-  
+
   const followingSnap = await db
     .collection("users")
     .doc(uid)
@@ -77,103 +93,97 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
   const [reviewsSnapshot, listsSnapshot] = await Promise.all([
     db.collection("reviews")
       .where("userId", "in", activeIds)
-      .limit(100) 
+      .orderBy("createdAt", "desc")
+      .limit(50)
       .get(),
     db.collection("shared_lists")
       .where("userId", "in", activeIds)
-      .limit(100)
+      .orderBy("createdAt", "desc")
+      .limit(50)
       .get()
   ]);
 
-  const reviews = await Promise.all(
-    reviewsSnapshot.docs.map(async (d) => {
-      const data = d.data();
-      let isLikedByCurrentUser = false;
-      
-      if (uid) {
-        const likeSnap = await db
-          .collection("reviews")
-          .doc(d.id)
-          .collection("likes")
-          .doc(uid)
-          .get();
-        isLikedByCurrentUser = likeSnap.exists;
-      }
+  const reviewIds = reviewsSnapshot.docs.map(d => d.id);
+  let likedIds = new Set();
+  if (reviewIds.length > 0) {
+    const likeChecks = await Promise.all(
+      reviewIds.map(id =>
+        db.collection("reviews").doc(id).collection("likes").doc(uid).get()
+      )
+    );
+    likeChecks.forEach((snap, i) => {
+      if (snap.exists) likedIds.add(reviewIds[i]);
+    });
+  }
 
-      return {
-        id: d.id,
-        mediaId: data.mediaId,
-        mediaType: data.mediaType,
-        mediaTitle: data.mediaTitle,
-        posterPath: data.posterPath || null,
-        backdropPath: data.backdropPath || null,
-        rating: data.rating,
-        text: data.text || null,
-        likesCount: data.likesCount || 0,
-        commentsCount: data.commentsCount || 0,
-        createdAt: data.createdAt,
-        username: data.username || 'Usuário',
-        userPhoto: data.userPhoto || null,
-        levelTitle: data.levelTitle || null,
-        isEliteReview: data.isEliteReview || false,
-        isEdited: data.isEdited || false,
-        isLikedByCurrentUser,
-        replies: [],
-        type: 'review'
-      };
-    })
+  const reviews = reviewsSnapshot.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      mediaId: data.mediaId,
+      mediaType: data.mediaType,
+      mediaTitle: data.mediaTitle,
+      posterPath: data.posterPath || null,
+      backdropPath: data.backdropPath || null,
+      rating: data.rating,
+      text: data.text || null,
+      likesCount: data.likesCount || 0,
+      commentsCount: data.commentsCount || 0,
+      createdAt: data.createdAt,
+      username: data.username || 'Usuário',
+      userPhoto: data.userPhoto || null,
+      levelTitle: data.levelTitle || null,
+      isEliteReview: data.isEliteReview || false,
+      isEdited: data.isEdited || false,
+      isLikedByCurrentUser: likedIds.has(d.id),
+      replies: [],
+      type: 'review'
+    };
+  });
+
+  const listIds = listsSnapshot.docs.map(d => ({ docId: d.id, data: d.data() }));
+  const listDetailRefs = listIds.map(({ data }) =>
+    db.collection("users").doc(data.userId).collection("lists").doc(data.listId).get()
   );
+  const listDetails = await Promise.all(listDetailRefs.map(p => p.catch(() => null)));
 
-  const sharedLists = await Promise.all(
-    listsSnapshot.docs.map(async (doc) => {
-      const data = doc.data();
-      let listItems = [];
-      let listCount = 0;
-      let currentListName = data.listName;
+  const sharedLists = listsSnapshot.docs.map((doc, i) => {
+    const data = doc.data();
+    const listDoc = listDetails[i];
+    let listItems = [];
+    let listCount = 0;
+    let currentListName = data.listName;
 
-      try {
-        const listDoc = await db
-          .collection("users")
-          .doc(data.userId)
-          .collection("lists")
-          .doc(data.listId)
-          .get();
-        
-        if (listDoc.exists) {
-          const listData = listDoc.data();
-          currentListName = listData.name;
-          listCount = listData.items?.length || 0;
-          listItems = listData.items?.slice(0, 4) || [];
-        }
-      } catch (e) {}
+    if (listDoc && listDoc.exists) {
+      const listData = listDoc.data();
+      currentListName = listData.name;
+      listCount = listData.items?.length || 0;
+      listItems = listData.items?.slice(0, 4) || [];
+    }
 
-      return {
-        id: doc.id,
-        username: data.username || "Usuário",
-        userPhoto: data.userPhoto || null,
-        listName: currentListName,
-        listCount,
-        listItems,
-        attachmentId: data.listId,
-        createdAt: data.createdAt,
-        type: 'list_share',
-        content: data.content,
-        likesCount: data.likesCount || 0
-      };
-    })
-  );
+    return {
+      id: doc.id,
+      username: data.username || "Usuário",
+      userPhoto: data.userPhoto || null,
+      listName: currentListName,
+      listCount,
+      listItems,
+      attachmentId: data.listId,
+      createdAt: data.createdAt,
+      type: 'list_share',
+      content: data.content,
+      likesCount: data.likesCount || 0
+    };
+  });
 
   const feed = [...reviews, ...sharedLists];
-
   feed.sort(
     (a, b) =>
       (b.createdAt?.toDate?.() || new Date(b.createdAt)) -
       (a.createdAt?.toDate?.() || new Date(a.createdAt))
   );
 
-  const paginatedFeed = feed.slice(offset, offset + limit);
-
-  res.status(200).json(paginatedFeed);
+  res.status(200).json(feed.slice(offset, offset + limit));
 });
 
 exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
@@ -183,44 +193,44 @@ exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
 
   const snapshot = await db
     .collection("shared_lists")
+    .orderBy("createdAt", "desc")
     .limit(100)
     .get();
 
-  const allLists = await Promise.all(
-    snapshot.docs.map(async (doc) => {
-      const data = doc.data();
-      let listItems = [];
-      let listCount = 0;
-      let currentListName = data.listName;
-      try {
-        const listDoc = await db
-          .collection("users")
-          .doc(data.userId)
-          .collection("lists")
-          .doc(data.listId)
-          .get();
-        if (listDoc.exists) {
-          const listData = listDoc.data();
-          currentListName = listData.name;
-          listCount = listData.items?.length || 0;
-          listItems = listData.items?.slice(0, 4) || [];
-        }
-      } catch (e) {}
-      return {
-        id: doc.id,
-        username: data.username || "Usuário",
-        userPhoto: data.userPhoto || null,
-        listName: currentListName,
-        listCount,
-        listItems,
-        attachmentId: data.listId,
-        createdAt: data.createdAt,
-        type: 'list_share',
-        content: data.content,
-        likesCount: data.likesCount || 0
-      };
-    }),
-  );
+  const listDetailRefs = snapshot.docs.map(doc => {
+    const data = doc.data();
+    return db.collection("users").doc(data.userId).collection("lists").doc(data.listId).get();
+  });
+  const listDetails = await Promise.all(listDetailRefs.map(p => p.catch(() => null)));
+
+  const allLists = snapshot.docs.map((doc, i) => {
+    const data = doc.data();
+    const listDoc = listDetails[i];
+    let listItems = [];
+    let listCount = 0;
+    let currentListName = data.listName;
+
+    if (listDoc && listDoc.exists) {
+      const listData = listDoc.data();
+      currentListName = listData.name;
+      listCount = listData.items?.length || 0;
+      listItems = listData.items?.slice(0, 4) || [];
+    }
+
+    return {
+      id: doc.id,
+      username: data.username || "Usuário",
+      userPhoto: data.userPhoto || null,
+      listName: currentListName,
+      listCount,
+      listItems,
+      attachmentId: data.listId,
+      createdAt: data.createdAt,
+      type: 'list_share',
+      content: data.content,
+      likesCount: data.likesCount || 0
+    };
+  });
 
   allLists.sort(
     (a, b) =>
@@ -228,6 +238,5 @@ exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
       (a.createdAt?.toDate?.() || new Date(a.createdAt))
   );
 
-  const paginatedFeed = allLists.slice(offset, offset + limit);
-  res.status(200).json(paginatedFeed);
+  res.status(200).json(allLists.slice(offset, offset + limit));
 });
