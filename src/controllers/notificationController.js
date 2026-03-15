@@ -6,6 +6,8 @@ exports.getNotifications = catchAsync(async (req, res, next) => {
   const snapshot = await db
     .collection("notifications")
     .where("recipientId", "==", uid)
+    .orderBy("createdAt", "desc")
+    .limit(20)
     .get();
 
   const notifications = snapshot.docs.map((doc) => {
@@ -35,8 +37,7 @@ exports.getNotifications = catchAsync(async (req, res, next) => {
     };
   });
 
-  notifications.sort((a, b) => b.createdAt - a.createdAt);
-  res.status(200).json(notifications.slice(0, 20));
+  res.status(200).json(notifications);
 });
 
 exports.markAsRead = catchAsync(async (req, res, next) => {
