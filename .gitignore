@@ -6,6 +6,8 @@ node_modules/
 
 serviceAccountKey.json
 
+scripts
+
 logs
 *.log
 npm-debug.log*
