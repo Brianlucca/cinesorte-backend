@@ -1,27 +1,48 @@
 const { db } = require("../config/firebase");
 const catchAsync = require("../utils/catchAsync");
 
+const safeUsername = (val) => (val && val.trim()) ? val.trim() : null;
+
+async function resolveUsernamesFallback(docs, getDataFn) {
+  const usersToFetch = new Set();
+  docs.forEach(doc => {
+    const data = getDataFn(doc);
+    if (!safeUsername(data.username) && data.userId) {
+      usersToFetch.add(data.userId);
+    }
+  });
+
+  const userCache = {};
+  if (usersToFetch.size > 0) {
+    await Promise.all([...usersToFetch].map(async (userId) => {
+      try {
+        const userDoc = await db.collection("users").doc(userId).get();
+        if (userDoc.exists) {
+          const ud = userDoc.data();
+          userCache[userId] = {
+            username: safeUsername(ud.username) || null,
+            userPhoto: ud.photoURL || null,
+          };
+        }
+      } catch {}
+    }));
+  }
+  return userCache;
+}
+
 exports.getGlobalFeed = catchAsync(async (req, res, next) => {
   const { uid } = req.user || {};
   const page = parseInt(req.query.page) || 1;
   const limit = 20;
 
-  let query = db.collection("reviews")
-    .orderBy("createdAt", "desc")
-    .limit(limit);
+  let query = db.collection("reviews").orderBy("createdAt", "desc").limit(limit);
 
   if (page > 1) {
     const offset = (page - 1) * limit;
-    const countSnap = await db.collection("reviews")
-      .orderBy("createdAt", "desc")
-      .limit(offset)
-      .get();
+    const countSnap = await db.collection("reviews").orderBy("createdAt", "desc").limit(offset).get();
     if (!countSnap.empty) {
       const lastDoc = countSnap.docs[countSnap.docs.length - 1];
-      query = db.collection("reviews")
-        .orderBy("createdAt", "desc")
-        .startAfter(lastDoc)
-        .limit(limit);
+      query = db.collection("reviews").orderBy("createdAt", "desc").startAfter(lastDoc).limit(limit);
     }
   }
 
@@ -31,17 +52,18 @@ exports.getGlobalFeed = catchAsync(async (req, res, next) => {
   if (uid && !snapshot.empty) {
     const reviewIds = snapshot.docs.map(d => d.id);
     const likeChecks = await Promise.all(
-      reviewIds.map(id =>
-        db.collection("reviews").doc(id).collection("likes").doc(uid).get()
-      )
+      reviewIds.map(id => db.collection("reviews").doc(id).collection("likes").doc(uid).get())
     );
     likeChecks.forEach((snap, i) => {
       if (snap.exists) likedIds.add(reviewIds[i]);
     });
   }
 
+  const userCache = await resolveUsernamesFallback(snapshot.docs, d => d.data());
+
   const feed = snapshot.docs.map((doc) => {
     const data = doc.data();
+    const fallback = userCache[data.userId] || {};
     return {
       id: doc.id,
       mediaId: data.mediaId,
@@ -54,12 +76,13 @@ exports.getGlobalFeed = catchAsync(async (req, res, next) => {
       likesCount: data.likesCount || 0,
       commentsCount: data.commentsCount || 0,
       createdAt: data.createdAt,
-      username: data.username || 'Usuário',
-      userPhoto: data.userPhoto || null,
+      username: safeUsername(data.username) || safeUsername(fallback.username) || 'Usuário',
+      userPhoto: data.userPhoto || fallback.userPhoto || null,
       levelTitle: data.levelTitle || null,
       isEliteReview: data.isEliteReview || false,
       isEdited: data.isEdited || false,
       isLikedByCurrentUser: likedIds.has(doc.id),
+      isOwner: uid ? data.userId === uid : false,
       replies: [],
       type: 'review'
     };
@@ -74,50 +97,36 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
   const limit = 20;
   const offset = (page - 1) * limit;
 
-  const followingSnap = await db
-    .collection("users")
-    .doc(uid)
-    .collection("following")
-    .get();
-
+  const followingSnap = await db.collection("users").doc(uid).collection("following").get();
   if (followingSnap.empty) return res.status(200).json([]);
 
-  const followingIds = followingSnap.docs
-    .map((doc) => doc.id)
-    .filter((id) => id !== uid);
-
+  const followingIds = followingSnap.docs.map(doc => doc.id).filter(id => id !== uid);
   if (followingIds.length === 0) return res.status(200).json([]);
 
   const activeIds = followingIds.slice(0, 30);
 
   const [reviewsSnapshot, listsSnapshot] = await Promise.all([
-    db.collection("reviews")
-      .where("userId", "in", activeIds)
-      .orderBy("createdAt", "desc")
-      .limit(50)
-      .get(),
-    db.collection("shared_lists")
-      .where("userId", "in", activeIds)
-      .orderBy("createdAt", "desc")
-      .limit(50)
-      .get()
+    db.collection("reviews").where("userId", "in", activeIds).orderBy("createdAt", "desc").limit(50).get(),
+    db.collection("shared_lists").where("userId", "in", activeIds).orderBy("createdAt", "desc").limit(50).get()
   ]);
 
   const reviewIds = reviewsSnapshot.docs.map(d => d.id);
   let likedIds = new Set();
   if (reviewIds.length > 0) {
     const likeChecks = await Promise.all(
-      reviewIds.map(id =>
-        db.collection("reviews").doc(id).collection("likes").doc(uid).get()
-      )
+      reviewIds.map(id => db.collection("reviews").doc(id).collection("likes").doc(uid).get())
     );
     likeChecks.forEach((snap, i) => {
       if (snap.exists) likedIds.add(reviewIds[i]);
     });
   }
 
+  const reviewUserCache = await resolveUsernamesFallback(reviewsSnapshot.docs, d => d.data());
+  const listUserCache = await resolveUsernamesFallback(listsSnapshot.docs, d => d.data());
+
   const reviews = reviewsSnapshot.docs.map((d) => {
     const data = d.data();
+    const fallback = reviewUserCache[data.userId] || {};
     return {
       id: d.id,
       mediaId: data.mediaId,
@@ -130,26 +139,28 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
       likesCount: data.likesCount || 0,
       commentsCount: data.commentsCount || 0,
       createdAt: data.createdAt,
-      username: data.username || 'Usuário',
-      userPhoto: data.userPhoto || null,
+      username: safeUsername(data.username) || safeUsername(fallback.username) || 'Usuário',
+      userPhoto: data.userPhoto || fallback.userPhoto || null,
       levelTitle: data.levelTitle || null,
       isEliteReview: data.isEliteReview || false,
       isEdited: data.isEdited || false,
       isLikedByCurrentUser: likedIds.has(d.id),
+      isOwner: uid ? data.userId === uid : false,
       replies: [],
       type: 'review'
     };
   });
 
-  const listIds = listsSnapshot.docs.map(d => ({ docId: d.id, data: d.data() }));
-  const listDetailRefs = listIds.map(({ data }) =>
-    db.collection("users").doc(data.userId).collection("lists").doc(data.listId).get()
-  );
+  const listDetailRefs = listsSnapshot.docs.map(doc => {
+    const data = doc.data();
+    return db.collection("users").doc(data.userId).collection("lists").doc(data.listId).get();
+  });
   const listDetails = await Promise.all(listDetailRefs.map(p => p.catch(() => null)));
 
   const sharedLists = listsSnapshot.docs.map((doc, i) => {
     const data = doc.data();
     const listDoc = listDetails[i];
+    const fallback = listUserCache[data.userId] || {};
     let listItems = [];
     let listCount = 0;
     let currentListName = data.listName;
@@ -163,8 +174,8 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
 
     return {
       id: doc.id,
-      username: data.username || "Usuário",
-      userPhoto: data.userPhoto || null,
+      username: safeUsername(data.username) || safeUsername(fallback.username) || 'Usuário',
+      userPhoto: data.userPhoto || fallback.userPhoto || null,
       listName: currentListName,
       listCount,
       listItems,
@@ -172,7 +183,8 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
       createdAt: data.createdAt,
       type: 'list_share',
       content: data.content,
-      likesCount: data.likesCount || 0
+      likesCount: data.likesCount || 0,
+      isOwner: uid ? data.userId === uid : false,
     };
   });
 
@@ -191,11 +203,9 @@ exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
   const limit = 20;
   const offset = (page - 1) * limit;
 
-  const snapshot = await db
-    .collection("shared_lists")
-    .orderBy("createdAt", "desc")
-    .limit(100)
-    .get();
+  const snapshot = await db.collection("shared_lists").orderBy("createdAt", "desc").limit(100).get();
+
+  const userCache = await resolveUsernamesFallback(snapshot.docs, d => d.data());
 
   const listDetailRefs = snapshot.docs.map(doc => {
     const data = doc.data();
@@ -206,6 +216,7 @@ exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
   const allLists = snapshot.docs.map((doc, i) => {
     const data = doc.data();
     const listDoc = listDetails[i];
+    const fallback = userCache[data.userId] || {};
     let listItems = [];
     let listCount = 0;
     let currentListName = data.listName;
@@ -219,8 +230,8 @@ exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
 
     return {
       id: doc.id,
-      username: data.username || "Usuário",
-      userPhoto: data.userPhoto || null,
+      username: safeUsername(data.username) || safeUsername(fallback.username) || 'Usuário',
+      userPhoto: data.userPhoto || fallback.userPhoto || null,
       listName: currentListName,
       listCount,
       listItems,

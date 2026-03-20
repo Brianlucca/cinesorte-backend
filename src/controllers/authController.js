@@ -41,6 +41,34 @@ async function deleteSubcollections(userRef) {
   }
 }
 
+async function syncUsernameAndPhoto(uid, newUsername, newPhoto) {
+  const collections = ['reviews', 'comments', 'shared_lists'];
+  const batchSize = 400;
+
+  for (const col of collections) {
+    let lastDoc = null;
+    while (true) {
+      let query = db.collection(col).where('userId', '==', uid).limit(batchSize);
+      if (lastDoc) query = query.startAfter(lastDoc);
+
+      const snapshot = await query.get();
+      if (snapshot.empty) break;
+
+      const batch = db.batch();
+      snapshot.docs.forEach(doc => {
+        const updates = {};
+        if (newUsername !== undefined) updates.username = newUsername;
+        if (newPhoto !== undefined) updates.userPhoto = newPhoto;
+        if (Object.keys(updates).length > 0) batch.update(doc.ref, updates);
+      });
+      await batch.commit();
+
+      lastDoc = snapshot.docs[snapshot.docs.length - 1];
+      if (snapshot.docs.length < batchSize) break;
+    }
+  }
+}
+
 exports.register = catchAsync(async (req, res, next) => {
   const { email, password, name, nickname } = req.body;
 
@@ -193,6 +221,8 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
   }
 
   const userRef = db.collection("users").doc(uid);
+  let usernameChanged = null;
+  let photoChanged = null;
 
   try {
     await db.runTransaction(async (t) => {
@@ -204,7 +234,7 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
       const history = {};
 
       if (username && username !== userData.username) {
-        const checkSnapshot = await t.get(db.collection("users").where("username", "==", username).limit(1));
+        const checkSnapshot = await db.collection("users").where("username", "==", username).limit(1).get();
         if (!checkSnapshot.empty && checkSnapshot.docs[0].id !== uid) throw new Error("USERNAME_TAKEN");
 
         if (userData.lastUsernameChange) {
@@ -215,6 +245,7 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
         updates.username = username;
         updates.lastUsernameChange = new Date();
         history.username = { from: userData.username || null, to: username };
+        usernameChanged = username;
       }
 
       if (bio !== undefined) {
@@ -224,6 +255,7 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
       if (photoURL !== undefined) {
         updates.photoURL = photoURL;
         history.photoURL = { from: userData.photoURL || null, to: photoURL };
+        photoChanged = photoURL;
       }
       if (backgroundURL !== undefined) {
         updates.backgroundURL = backgroundURL;
@@ -241,9 +273,20 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
         });
       }
     });
+
+    if (usernameChanged || photoChanged !== null) {
+      syncUsernameAndPhoto(uid, usernameChanged, photoChanged).catch(err => {
+        require('../utils/logger').error('syncUsernameAndPhoto failed: %o', err);
+      });
+    }
+
     res.status(200).json({ message: "Perfil atualizado." });
   } catch (error) {
     if (error.message === "USERNAME_TAKEN") return next(new AppError('Username em uso.', 400));
+    if (error.message?.startsWith("WAIT_")) {
+      const days = error.message.split("_")[1];
+      return next(new AppError(`Aguarde ${days} dia(s) para trocar o username novamente.`, 400));
+    }
     throw error;
   }
 });

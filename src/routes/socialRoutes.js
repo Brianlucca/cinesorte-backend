@@ -36,5 +36,6 @@ router.get('/comments/:reviewId', verifyToken, reviewController.getComments);
 
 router.post('/share-list', verifyToken, listController.shareList);
 router.get('/lists/:username/:listId', verifyToken, listController.getPublicListDetails);
+router.get('/reviews-only/:username', verifyToken, reviewController.getUserReviewsOnly);
 
 module.exports = router;
