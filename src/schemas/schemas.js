@@ -21,7 +21,7 @@ const profileSchema = z.object({
 const reviewSchema = z.object({
   mediaId: z.union([z.string(), z.number()]),
   mediaType: z.enum(['movie', 'tv', 'person', 'episode']),
-  rating: z.number().min(0).max(10),
+  rating: z.number().min(0).max(10).optional().nullable(),
   text: z.string().max(2000).optional(),
   mediaTitle: z.string().optional(),
   posterPath: z.string().nullable().optional(),
