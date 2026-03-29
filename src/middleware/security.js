@@ -54,13 +54,17 @@ const registerLimiter = rateLimit({
 const shield = (req, res, next) => {
   const userAgent = req.headers['user-agent'] || '';
   const origin = req.headers.origin;
+  
   if (env.NODE_ENV === 'production') {
     if (/PostmanRuntime|Insomnia|curl/i.test(userAgent)) {
       sendAlert(`BLOCK: Ferramenta barrada.\nIP: ${req.ip}`);
       return res.status(403).json({ message: "Acesso bloqueado." });
     }
+
+    const isPublicTmdbRoute = req.originalUrl.startsWith('/api/tmdb/details') && req.method === 'GET';
+
     if (!origin || !origin.startsWith(env.FRONTEND_URL)) {
-      if (req.headers['sec-fetch-site'] !== 'same-origin') {
+      if (req.headers['sec-fetch-site'] !== 'same-origin' && !isPublicTmdbRoute) {
         sendAlert(`ORIGEM: Acesso de fonte desconhecida.\nOrigin: ${origin}`);
         return res.status(403).json({ message: "Origem nao autorizada." });
       }
