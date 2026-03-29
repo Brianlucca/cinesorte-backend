@@ -23,7 +23,8 @@ const app = express();
 
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin && env.NODE_ENV === "development") return callback(null, true);
+    if (!origin) return callback(null, true);
+    
     const normalizedAllowedOrigin = env.FRONTEND_URL.endsWith("/")
       ? env.FRONTEND_URL.slice(0, -1)
       : env.FRONTEND_URL;
