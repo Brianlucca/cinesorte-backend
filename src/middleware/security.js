@@ -1,8 +1,15 @@
-const rateLimit = require('express-rate-limit');
-const env = require('../config/env');
-const { sendAlert } = require('../services/telegramService');
+const rateLimit = require("express-rate-limit");
+const env = require("../config/env");
+const { sendAlert } = require("../services/telegramService");
 
 const userTracker = new Map();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of userTracker.entries()) {
+    if (now - val.start > 120000) userTracker.delete(key);
+  }
+}, 60000);
 
 const userSpamDetector = (req, res, next) => {
   if (req.user && req.user.username) {
@@ -20,7 +27,9 @@ const userSpamDetector = (req, res, next) => {
     userTracker.set(username, userData);
 
     if (userData.count > 60) {
-      sendAlert(`SUSPEITA DE SPAM\n\nUser: @${username}\nReq/min: ${userData.count}\nIP: ${req.ip}`);
+      sendAlert(
+        `SUSPEITA DE SPAM\n\nUser: @${username}\nReq/min: ${userData.count}\nIP: ${req.ip}`
+      );
       userData.count = 0;
     }
   }
@@ -30,59 +39,102 @@ const userSpamDetector = (req, res, next) => {
 const tmdbApiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
   max: 200,
-  message: { message: 'Muitas requisicoes.' }
+  message: { message: "Muitas requisicoes." },
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   handler: (req, res) => {
-    if (env.NODE_ENV === 'production') sendAlert(`BRUTE FORCE: IP ${req.ip} bloqueado.`);
-    res.status(429).json({ message: 'IP bloqueado por 15 minutos.' });
-  }
+    if (env.NODE_ENV === "production")
+      sendAlert(`BRUTE FORCE: IP ${req.ip} bloqueado.`);
+    res.status(429).json({ message: "IP bloqueado por 15 minutos." });
+  },
 });
 
 const registerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
   handler: (req, res) => {
-    if (env.NODE_ENV === 'production') sendAlert(`REGISTER RATE LIMIT: IP ${req.ip} bloqueado.`);
-    res.status(429).json({ message: 'Muitas tentativas de registro. Tente novamente mais tarde.' });
-  }
+    if (env.NODE_ENV === "production")
+      sendAlert(`REGISTER RATE LIMIT: IP ${req.ip} bloqueado.`);
+    res
+      .status(429)
+      .json({ message: "Muitas tentativas de registro. Tente novamente mais tarde." });
+  },
 });
 
+const BLOCKED_UA = /PostmanRuntime|Insomnia|curl/i;
+
 const shield = (req, res, next) => {
-  const userAgent = req.headers['user-agent'] || '';
+  const userAgent = req.headers["user-agent"] || "";
   const origin = req.headers.origin;
-  
-  if (env.NODE_ENV === 'production') {
-    if (/PostmanRuntime|Insomnia|curl/i.test(userAgent)) {
+
+  if (env.NODE_ENV === "production") {
+    if (BLOCKED_UA.test(userAgent)) {
       sendAlert(`BLOCK: Ferramenta barrada.\nIP: ${req.ip}`);
       return res.status(403).json({ message: "Acesso bloqueado." });
     }
 
-    const isPublicTmdbRoute = req.originalUrl.startsWith('/api/tmdb/details') && req.method === 'GET';
+    const isPublicTmdbRoute =
+      req.originalUrl.startsWith("/api/tmdb/details") && req.method === "GET";
 
-    if (!origin || !origin.startsWith(env.FRONTEND_URL)) {
-      if (req.headers['sec-fetch-site'] !== 'same-origin' && !isPublicTmdbRoute) {
-        sendAlert(`ORIGEM: Acesso de fonte desconhecida.\nOrigin: ${origin}`);
-        return res.status(403).json({ message: "Origem nao autorizada." });
+    if (!isPublicTmdbRoute) {
+      const normalizedAllowed = env.FRONTEND_URL.replace(/\/$/, "");
+      const normalizedOrigin = (origin || "").replace(/\/$/, "");
+
+      if (normalizedOrigin !== normalizedAllowed) {
+        if (req.headers["sec-fetch-site"] !== "same-origin") {
+          sendAlert(`ORIGEM: Acesso de fonte desconhecida.\nOrigin: ${origin}`);
+          return res.status(403).json({ message: "Origem nao autorizada." });
+        }
       }
     }
   }
   next();
 };
 
-const sanitizeInput = (req, res, next) => {
-  const sanitize = (obj) => {
-    for (const key in obj) {
-      if (typeof obj[key] === 'string') {
-        obj[key] = obj[key].replace(/</g, "&lt;").replace(/>/g, "&gt;").trim();
-      }
+const DANGEROUS_PATTERNS = [
+  /<script[\s\S]*?>/i,
+  /javascript\s*:/i,
+  /on\w+\s*=/i,
+  /\$\{[\s\S]*?\}/,
+  /<!--[\s\S]*?-->/,
+];
+
+function deepSanitize(obj, depth = 0) {
+  if (depth > 10) return obj;
+  if (typeof obj === "string") {
+    for (const pattern of DANGEROUS_PATTERNS) {
+      if (pattern.test(obj)) return "";
     }
-  };
-  if (req.body) sanitize(req.body);
+    return obj.trim();
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => deepSanitize(item, depth + 1));
+  }
+  if (obj !== null && typeof obj === "object") {
+    const sanitized = {};
+    for (const key of Object.keys(obj)) {
+      sanitized[key] = deepSanitize(obj[key], depth + 1);
+    }
+    return sanitized;
+  }
+  return obj;
+}
+
+const sanitizeInput = (req, res, next) => {
+  if (req.body && typeof req.body === "object") {
+    req.body = deepSanitize(req.body);
+  }
   next();
 };
 
-module.exports = { tmdbApiLimiter, authLimiter, registerLimiter, sanitizeInput, shield, userSpamDetector };
+module.exports = {
+  tmdbApiLimiter,
+  authLimiter,
+  registerLimiter,
+  sanitizeInput,
+  shield,
+  userSpamDetector,
+};
