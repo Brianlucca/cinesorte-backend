@@ -7,7 +7,14 @@ const registerSchema = z.object({
   name: z.string().min(2).max(50).regex(nameRegex),
   nickname: z.string().min(3).max(30).regex(/^[a-z0-9_]+$/),
   email: z.string().email(),
-  password: z.string().min(6).regex(passwordRegex)
+  password: z.string().min(6).regex(passwordRegex),
+  turnstileToken: z.string().min(1, 'Verificação de segurança obrigatória.'),
+});
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+  turnstileToken: z.string().min(1, 'Verificação de segurança obrigatória.'),
 });
 
 const profileSchema = z.object({
@@ -15,7 +22,7 @@ const profileSchema = z.object({
   username: z.string().min(3).max(30).regex(/^[a-z0-9_]+$/).optional(),
   bio: z.string().max(300).optional(),
   photoURL: z.string().optional(),
-  backgroundURL: z.string().optional()
+  backgroundURL: z.string().optional(),
 });
 
 const reviewSchema = z.object({
@@ -25,20 +32,20 @@ const reviewSchema = z.object({
   text: z.string().max(2000).optional(),
   mediaTitle: z.string().optional(),
   posterPath: z.string().nullable().optional(),
-  backdropPath: z.string().nullable().optional()
+  backdropPath: z.string().nullable().optional(),
 });
 
 const commentSchema = z.object({
   reviewId: z.string(),
   text: z.string().min(1).max(1000),
-  parentId: z.string().nullable().optional()
+  parentId: z.string().nullable().optional(),
 });
 
 const listSchema = z.object({
   listId: z.string().optional(),
   listName: z.string().min(1).max(60),
   description: z.string().max(300).optional(),
-  isPublic: z.boolean().default(true)
+  isPublic: z.boolean().default(true),
 });
 
 const addToListSchema = z.object({
@@ -49,15 +56,16 @@ const addToListSchema = z.object({
     poster_path: z.string().nullable().optional(),
     backdrop_path: z.string().nullable().optional(),
     media_type: z.string().optional(),
-    vote_average: z.number().optional()
-  })
+    vote_average: z.number().optional(),
+  }),
 });
 
-module.exports = { 
-  registerSchema, 
-  profileSchema, 
-  reviewSchema, 
-  commentSchema, 
-  listSchema, 
-  addToListSchema 
+module.exports = {
+  registerSchema,
+  loginSchema,
+  profileSchema,
+  reviewSchema,
+  commentSchema,
+  listSchema,
+  addToListSchema,
 };

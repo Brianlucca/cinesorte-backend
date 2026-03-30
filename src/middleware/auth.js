@@ -43,7 +43,7 @@ const optionalVerify = catchAsync(async (req, res, next) => {
 });
 
 const requireTerms = (req, res, next) => {
-  const CURRENT_TERMS_VERSION = '1.0';
+  const CURRENT_TERMS_VERSION = '2.0';
   if (!req.user || req.user.termsVersion !== CURRENT_TERMS_VERSION) {
     return next(new AppError('Aceite os novos termos.', 403));
   }
