@@ -1,0 +1,13 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    - cron: '*/14 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping API
+        run: curl -s -H "Origin: https://cinesorte.vercel.app/" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" https://cinesorte-backend.onrender.com/api/health
