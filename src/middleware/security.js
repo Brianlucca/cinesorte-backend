@@ -137,4 +137,5 @@ module.exports = {
   sanitizeInput,
   shield,
   userSpamDetector,
+  userTracker,
 };
