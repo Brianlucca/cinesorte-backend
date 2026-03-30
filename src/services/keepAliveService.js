@@ -7,7 +7,7 @@ const startKeepAlive = () => {
       await axios.get(`${env.BACKEND_URL}/api/health`);
     } catch (error) {
     }
-  }, 10 * 60 * 1000); // 10 minutos
+  }, 10 * 60 * 1000);
 };
 
 module.exports = { startKeepAlive };
