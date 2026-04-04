@@ -197,16 +197,17 @@ exports.getUserLists = catchAsync(async (req, res, next) => {
 
 exports.getPublicListDetails = catchAsync(async (req, res, next) => {
   const { username, listId } = req.params;
+
   const userQuery = await db
     .collection("users")
     .where("username", "==", username)
     .limit(1)
     .get();
-  if (userQuery.empty)
-    return next(new AppError("Usuário não encontrado.", 404));
+  if (userQuery.empty) return next(new AppError("Usuário não encontrado.", 404));
 
   const userId = userQuery.docs[0].id;
   const ownerData = userQuery.docs[0].data();
+
   const listDoc = await db
     .collection("users")
     .doc(userId)
@@ -216,8 +217,29 @@ exports.getPublicListDetails = catchAsync(async (req, res, next) => {
   if (!listDoc.exists) return next(new AppError("Lista não encontrada.", 404));
 
   const listData = listDoc.data();
-  if (!listData.isPublic)
-    return next(new AppError("Esta lista é privada.", 403));
+  if (!listData.isPublic) return next(new AppError("Esta lista é privada.", 403));
+
+  let clonedFrom = null;
+
+  if (listData.clonedFrom) {
+    const originalOwnerQuery = await db
+      .collection("users")
+      .where("username", "==", listData.clonedFrom.owner)
+      .limit(1)
+      .get();
+
+    let originalOwnerPhoto = null;
+    if (!originalOwnerQuery.empty) {
+      originalOwnerPhoto = originalOwnerQuery.docs[0].data().photoURL || null;
+    }
+
+    clonedFrom = {
+      listId: listData.clonedFrom.listId,
+      owner: listData.clonedFrom.owner,
+      originalName: listData.clonedFrom.originalName || listData.name,
+      ownerPhoto: originalOwnerPhoto,
+    };
+  }
 
   res.status(200).json({
     id: listId,
@@ -232,6 +254,7 @@ exports.getPublicListDetails = catchAsync(async (req, res, next) => {
     updatedAt: listData.updatedAt?.toDate
       ? listData.updatedAt.toDate()
       : listData.updatedAt,
+    clonedFrom,
     owner: {
       username: ownerData.username,
       photoURL: ownerData.photoURL || null,
