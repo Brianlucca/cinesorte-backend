@@ -5,10 +5,13 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "jest --runInBand --detectOpenHandles"
+    "test": "jest --runInBand --detectOpenHandles",
+    "backfill:review-likes": "node scripts/backfillReviewLikesIndex.js"
   },
   "jest": {
-    "setupFiles": ["<rootDir>/tests/jest.setup.js"]
+    "setupFiles": [
+      "<rootDir>/tests/jest.setup.js"
+    ]
   },
   "keywords": [],
   "author": "",
@@ -23,6 +26,7 @@
     "express-rate-limit": "^8.2.1",
     "firebase-admin": "^13.5.0",
     "helmet": "^8.1.0",
+    "redis": "^5.11.0",
     "winston": "^3.19.0",
     "zod": "^4.3.6"
   },
