@@ -4,6 +4,7 @@ const tmdbApi = require("../api/tmdb");
 const { getXPNeeded, checkTrophies } = require("../utils/gamification");
 const catchAsync = require("../utils/catchAsync");
 const AppError = require("../utils/AppError");
+const { deleteByPrefix } = require("../services/cacheService");
 
 exports.recordInteraction = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
@@ -30,6 +31,7 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
       ? doc.data()
       : { userId: uid, mediaId: mediaId.toString(), mediaType };
     data.userId = uid;
+    const userUpdates = {};
 
     if (mediaTitle) data.mediaTitle = mediaTitle;
     if (posterPath) data.posterPath = posterPath;
@@ -44,6 +46,20 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
       data.disliked = false;
       genreWeight = data.liked ? 3 : -3;
       if (!wasLiked && data.liked) xpEarned = 5;
+      userUpdates.likedMediaIds = data.liked
+        ? admin.firestore.FieldValue.arrayUnion(mediaId.toString())
+        : admin.firestore.FieldValue.arrayRemove(mediaId.toString());
+    } else if (action === "dislike") {
+      const wasDisliked = data.disliked;
+      const wasLiked = data.liked;
+      data.disliked = !data.disliked;
+      data.liked = false;
+      if (wasLiked) {
+        userUpdates.likedMediaIds = admin.firestore.FieldValue.arrayRemove(mediaId.toString());
+      }
+      if (wasDisliked && !data.disliked) {
+        genreWeight = 0;
+      }
     } else if (action === "watched") {
       const wasWatched = data.watched;
       data.watched = !data.watched;
@@ -62,7 +78,6 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
     data.lastInteraction = new Date();
     t.set(interactionRef, data, { merge: true });
 
-    const userUpdates = {};
     let newLevel = userData.level || 1;
     const initialLevel = newLevel;
 
@@ -124,7 +139,9 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
       createdAt: new Date(),
       icon: "TrendingUp",
     });
+    await deleteByPrefix("notifications:");
   }
+  await deleteByPrefix("feed:");
   res.status(200).json({ message: "Sucesso." });
 });
 
