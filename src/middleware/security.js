@@ -3,6 +3,7 @@ const env = require("../config/env");
 const { sendAlert } = require("../services/telegramService");
 
 const userTracker = new Map();
+const SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 setInterval(() => {
   const now = Date.now();
@@ -10,6 +11,17 @@ setInterval(() => {
     if (now - val.start > 120000) userTracker.delete(key);
   }
 }, 60000);
+
+const normalizeOrigin = (value) => {
+  if (!value) return "";
+  try {
+    return new URL(value).origin.replace(/\/$/, "");
+  } catch {
+    return String(value).replace(/\/$/, "");
+  }
+};
+
+const allowedOrigin = normalizeOrigin(env.FRONTEND_URL);
 
 const userSpamDetector = (req, res, next) => {
   if (req.user && req.user.username) {
@@ -39,7 +51,7 @@ const userSpamDetector = (req, res, next) => {
 const tmdbApiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
   max: 200,
-  message: { message: "Muitas requisicoes." },
+  message: { message: "Muitas requisições." },
 });
 
 const authLimiter = rateLimit({
@@ -80,18 +92,35 @@ const shield = (req, res, next) => {
       req.originalUrl.startsWith("/api/tmdb/details") && req.method === "GET";
 
     if (!isPublicTmdbRoute) {
-      const normalizedAllowed = env.FRONTEND_URL.replace(/\/$/, "");
-      const normalizedOrigin = (origin || "").replace(/\/$/, "");
+      const normalizedOrigin = normalizeOrigin(origin);
 
-      if (normalizedOrigin !== normalizedAllowed) {
+      if (normalizedOrigin !== allowedOrigin) {
         if (req.headers["sec-fetch-site"] !== "same-origin") {
           sendAlert(`ORIGEM: Acesso de fonte desconhecida.\nOrigin: ${origin}`);
-          return res.status(403).json({ message: "Origem nao autorizada." });
+          return res.status(403).json({ message: "Origem não autorizada." });
         }
       }
     }
   }
   next();
+};
+
+const protectStateChangingRequests = (req, res, next) => {
+  if (env.NODE_ENV !== "production" || SAFE_HTTP_METHODS.has(req.method)) {
+    return next();
+  }
+
+  const requestOrigin = normalizeOrigin(req.headers.origin);
+  const refererOrigin = normalizeOrigin(req.headers.referer);
+
+  if (requestOrigin === allowedOrigin || refererOrigin === allowedOrigin) {
+    return next();
+  }
+
+  sendAlert(
+    `CSRF/ORIGIN BLOQUEADA\n\nMetodo: ${req.method}\nRota: ${req.originalUrl}\nOrigin: ${req.headers.origin || "ausente"}\nReferer: ${req.headers.referer || "ausente"}\nIP: ${req.ip}`
+  );
+  return res.status(403).json({ message: "Origem não autorizada." });
 };
 
 const DANGEROUS_PATTERNS = [
@@ -136,6 +165,7 @@ module.exports = {
   registerLimiter,
   sanitizeInput,
   shield,
+  protectStateChangingRequests,
   userSpamDetector,
   userTracker,
 };
