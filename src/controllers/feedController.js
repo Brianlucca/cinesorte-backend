@@ -1,69 +1,24 @@
 const { db } = require("../config/firebase");
 const catchAsync = require("../utils/catchAsync");
+const {
+  safeUsername,
+  getSharedListPreview,
+  resolveUsernamesFallback,
+  getCreatedAtMillis,
+  parseCursor,
+  buildCursorFromItems,
+} = require("../services/socialFeedService");
+const { remember } = require("../services/cacheService");
+const { feedKey } = require("../services/cacheKeys");
+const { getLikedReviewIds } = require("../services/reviewLikeStateService");
 
-const safeUsername = (val) => (val && val.trim()) ? val.trim() : null;
+const FEED_PAGE_SIZE = 20;
 
-async function resolveUsernamesFallback(docs, getDataFn) {
-  const usersToFetch = new Set();
-  docs.forEach(doc => {
-    const data = getDataFn(doc);
-    if (!safeUsername(data.username) && data.userId) {
-      usersToFetch.add(data.userId);
-    }
-  });
-
-  const userCache = {};
-  if (usersToFetch.size > 0) {
-    await Promise.all([...usersToFetch].map(async (userId) => {
-      try {
-        const userDoc = await db.collection("users").doc(userId).get();
-        if (userDoc.exists) {
-          const ud = userDoc.data();
-          userCache[userId] = {
-            username: safeUsername(ud.username) || null,
-            userPhoto: ud.photoURL || null,
-          };
-        }
-      } catch {}
-    }));
-  }
-  return userCache;
-}
-
-exports.getGlobalFeed = catchAsync(async (req, res, next) => {
-  const { uid } = req.user || {};
-  const page = parseInt(req.query.page) || 1;
-  const limit = 20;
-
-  let query = db.collection("reviews").orderBy("createdAt", "desc").limit(limit);
-
-  if (page > 1) {
-    const offset = (page - 1) * limit;
-    const countSnap = await db.collection("reviews").orderBy("createdAt", "desc").limit(offset).get();
-    if (!countSnap.empty) {
-      const lastDoc = countSnap.docs[countSnap.docs.length - 1];
-      query = db.collection("reviews").orderBy("createdAt", "desc").startAfter(lastDoc).limit(limit);
-    }
-  }
-
-  const snapshot = await query.get();
-
-  let likedIds = new Set();
-  if (uid && !snapshot.empty) {
-    const reviewIds = snapshot.docs.map(d => d.id);
-    const likeChecks = await Promise.all(
-      reviewIds.map(id => db.collection("reviews").doc(id).collection("likes").doc(uid).get())
-    );
-    likeChecks.forEach((snap, i) => {
-      if (snap.exists) likedIds.add(reviewIds[i]);
-    });
-  }
-
-  const userCache = await resolveUsernamesFallback(snapshot.docs, d => d.data());
-
-  const feed = snapshot.docs.map((doc) => {
+function buildReviewItems(docs, likedIds, uid, userCache) {
+  return docs.map((doc) => {
     const data = doc.data();
     const fallback = userCache[data.userId] || {};
+
     return {
       id: doc.id,
       mediaId: data.mediaId,
@@ -76,7 +31,7 @@ exports.getGlobalFeed = catchAsync(async (req, res, next) => {
       likesCount: data.likesCount || 0,
       commentsCount: data.commentsCount || 0,
       createdAt: data.createdAt,
-      username: safeUsername(data.username) || safeUsername(fallback.username) || 'Usuário',
+      username: safeUsername(data.username) || safeUsername(fallback.username) || "Usuário",
       userPhoto: data.userPhoto || fallback.userPhoto || null,
       levelTitle: data.levelTitle || null,
       isEliteReview: data.isEliteReview || false,
@@ -84,170 +39,174 @@ exports.getGlobalFeed = catchAsync(async (req, res, next) => {
       isLikedByCurrentUser: likedIds.has(doc.id),
       isOwner: uid ? data.userId === uid : false,
       replies: [],
-      type: 'review'
+      type: "review",
+    };
+  });
+}
+
+async function fetchLikedIds(reviewDocs, uid) {
+  const reviewIds = reviewDocs.map((doc) => doc.id);
+  return getLikedReviewIds(uid, reviewIds);
+}
+
+exports.getGlobalFeed = catchAsync(async (req, res, next) => {
+  const { uid } = req.user || {};
+  const cursorDate = parseCursor(req.query.cursor);
+  const cacheKey = feedKey("global", uid, req.query.cursor);
+
+  const payload = await remember(cacheKey, 15, async () => {
+    let query = db.collection("reviews").orderBy("createdAt", "desc").limit(FEED_PAGE_SIZE);
+    if (cursorDate) query = query.startAfter(cursorDate);
+
+    const snapshot = await query.get();
+    const likedIds = await fetchLikedIds(snapshot.docs, uid);
+    const userCache = await resolveUsernamesFallback(db, snapshot.docs, (doc) => doc.data());
+    const items = buildReviewItems(snapshot.docs, likedIds, uid, userCache);
+
+    return {
+      items,
+      hasMore: snapshot.docs.length === FEED_PAGE_SIZE,
+      nextCursor: buildCursorFromItems(items),
     };
   });
 
-  res.status(200).json(feed);
+  res.status(200).json(payload);
 });
 
 exports.getFollowingFeed = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
-  const page = parseInt(req.query.page) || 1;
-  const limit = 20;
-  const offset = (page - 1) * limit;
+  const cursorDate = parseCursor(req.query.cursor);
+  const cacheKey = feedKey("following", uid, req.query.cursor);
 
-  const followingSnap = await db.collection("users").doc(uid).collection("following").get();
-  if (followingSnap.empty) return res.status(200).json([]);
+  const payload = await remember(cacheKey, 15, async () => {
+    const followingSnap = await db
+      .collection("users")
+      .doc(uid)
+      .collection("following")
+      .limit(30)
+      .get();
 
-  const followingIds = followingSnap.docs.map(doc => doc.id).filter(id => id !== uid);
-  if (followingIds.length === 0) return res.status(200).json([]);
-
-  const activeIds = followingIds.slice(0, 30);
-
-  const [reviewsSnapshot, listsSnapshot] = await Promise.all([
-    db.collection("reviews").where("userId", "in", activeIds).orderBy("createdAt", "desc").limit(50).get(),
-    db.collection("shared_lists").where("userId", "in", activeIds).orderBy("createdAt", "desc").limit(50).get()
-  ]);
-
-  const reviewIds = reviewsSnapshot.docs.map(d => d.id);
-  let likedIds = new Set();
-  if (reviewIds.length > 0) {
-    const likeChecks = await Promise.all(
-      reviewIds.map(id => db.collection("reviews").doc(id).collection("likes").doc(uid).get())
-    );
-    likeChecks.forEach((snap, i) => {
-      if (snap.exists) likedIds.add(reviewIds[i]);
-    });
-  }
-
-  const reviewUserCache = await resolveUsernamesFallback(reviewsSnapshot.docs, d => d.data());
-  const listUserCache = await resolveUsernamesFallback(listsSnapshot.docs, d => d.data());
-
-  const reviews = reviewsSnapshot.docs.map((d) => {
-    const data = d.data();
-    const fallback = reviewUserCache[data.userId] || {};
-    return {
-      id: d.id,
-      mediaId: data.mediaId,
-      mediaType: data.mediaType,
-      mediaTitle: data.mediaTitle,
-      posterPath: data.posterPath || null,
-      backdropPath: data.backdropPath || null,
-      rating: data.rating,
-      text: data.text || null,
-      likesCount: data.likesCount || 0,
-      commentsCount: data.commentsCount || 0,
-      createdAt: data.createdAt,
-      username: safeUsername(data.username) || safeUsername(fallback.username) || 'Usuário',
-      userPhoto: data.userPhoto || fallback.userPhoto || null,
-      levelTitle: data.levelTitle || null,
-      isEliteReview: data.isEliteReview || false,
-      isEdited: data.isEdited || false,
-      isLikedByCurrentUser: likedIds.has(d.id),
-      isOwner: uid ? data.userId === uid : false,
-      replies: [],
-      type: 'review'
-    };
-  });
-
-  const listDetailRefs = listsSnapshot.docs.map(doc => {
-    const data = doc.data();
-    return db.collection("users").doc(data.userId).collection("lists").doc(data.listId).get();
-  });
-  const listDetails = await Promise.all(listDetailRefs.map(p => p.catch(() => null)));
-
-  const sharedLists = listsSnapshot.docs.map((doc, i) => {
-    const data = doc.data();
-    const listDoc = listDetails[i];
-    const fallback = listUserCache[data.userId] || {};
-    let listItems = [];
-    let listCount = 0;
-    let currentListName = data.listName;
-
-    if (listDoc && listDoc.exists) {
-      const listData = listDoc.data();
-      currentListName = listData.name;
-      listCount = listData.items?.length || 0;
-      listItems = listData.items?.slice(0, 4) || [];
+    if (followingSnap.empty) {
+      return { items: [], hasMore: false, nextCursor: null };
     }
 
+    const followingIds = followingSnap.docs.map((doc) => doc.id).filter((id) => id !== uid);
+    if (followingIds.length === 0) {
+      return { items: [], hasMore: false, nextCursor: null };
+    }
+
+    const activeIds = followingIds.slice(0, 30);
+    const queryWindow = FEED_PAGE_SIZE * 2;
+
+    let reviewsQuery = db
+      .collection("reviews")
+      .where("userId", "in", activeIds)
+      .orderBy("createdAt", "desc")
+      .limit(queryWindow);
+
+    let listsQuery = db
+      .collection("shared_lists")
+      .where("userId", "in", activeIds)
+      .orderBy("createdAt", "desc")
+      .limit(queryWindow);
+
+    if (cursorDate) {
+      reviewsQuery = reviewsQuery.startAfter(cursorDate);
+      listsQuery = listsQuery.startAfter(cursorDate);
+    }
+
+    const [reviewsSnapshot, listsSnapshot] = await Promise.all([
+      reviewsQuery.get(),
+      listsQuery.get(),
+    ]);
+
+    const likedIds = await fetchLikedIds(reviewsSnapshot.docs, uid);
+    const reviewUserCache = await resolveUsernamesFallback(db, reviewsSnapshot.docs, (doc) => doc.data());
+    const listUserCache = await resolveUsernamesFallback(db, listsSnapshot.docs, (doc) => doc.data());
+
+    const reviews = buildReviewItems(reviewsSnapshot.docs, likedIds, uid, reviewUserCache);
+    const sharedLists = listsSnapshot.docs.map((doc) => {
+      const data = doc.data();
+      const fallback = listUserCache[data.userId] || {};
+      const preview = getSharedListPreview(data);
+
+      return {
+        id: doc.id,
+        username: safeUsername(data.username) || safeUsername(fallback.username) || "Usuário",
+        userPhoto: data.userPhoto || fallback.userPhoto || null,
+        listName: preview.listName,
+        listCount: preview.listCount,
+        listItems: preview.listItems,
+        attachmentId: data.listId,
+        createdAt: data.createdAt,
+        type: "list_share",
+        content: data.content,
+        likesCount: data.likesCount || 0,
+        isOwner: uid ? data.userId === uid : false,
+      };
+    });
+
+    const mergedItems = [...reviews, ...sharedLists].sort(
+      (a, b) => getCreatedAtMillis(b.createdAt) - getCreatedAtMillis(a.createdAt)
+    );
+
+    const items = mergedItems.slice(0, FEED_PAGE_SIZE);
+
     return {
-      id: doc.id,
-      username: safeUsername(data.username) || safeUsername(fallback.username) || 'Usuário',
-      userPhoto: data.userPhoto || fallback.userPhoto || null,
-      listName: currentListName,
-      listCount,
-      listItems,
-      attachmentId: data.listId,
-      createdAt: data.createdAt,
-      type: 'list_share',
-      content: data.content,
-      likesCount: data.likesCount || 0,
-      isOwner: uid ? data.userId === uid : false,
+      items,
+      hasMore:
+        mergedItems.length > FEED_PAGE_SIZE ||
+        reviewsSnapshot.docs.length === queryWindow ||
+        listsSnapshot.docs.length === queryWindow,
+      nextCursor: buildCursorFromItems(items),
     };
   });
 
-  const feed = [...reviews, ...sharedLists];
-  feed.sort(
-    (a, b) =>
-      (b.createdAt?.toDate?.() || new Date(b.createdAt)) -
-      (a.createdAt?.toDate?.() || new Date(a.createdAt))
-  );
-
-  res.status(200).json(feed.slice(offset, offset + limit));
+  res.status(200).json(payload);
 });
 
 exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = 20;
-  const offset = (page - 1) * limit;
+  const cursorDate = parseCursor(req.query.cursor);
+  const cacheKey = feedKey("collections", req.user?.uid, req.query.cursor);
+  const payload = await remember(cacheKey, 20, async () => {
+    let query = db
+      .collection("shared_lists")
+      .orderBy("createdAt", "desc")
+      .limit(FEED_PAGE_SIZE);
 
-  const snapshot = await db.collection("shared_lists").orderBy("createdAt", "desc").limit(100).get();
+    if (cursorDate) query = query.startAfter(cursorDate);
 
-  const userCache = await resolveUsernamesFallback(snapshot.docs, d => d.data());
+    const snapshot = await query.get();
+    const userCache = await resolveUsernamesFallback(db, snapshot.docs, (doc) => doc.data());
 
-  const listDetailRefs = snapshot.docs.map(doc => {
-    const data = doc.data();
-    return db.collection("users").doc(data.userId).collection("lists").doc(data.listId).get();
-  });
-  const listDetails = await Promise.all(listDetailRefs.map(p => p.catch(() => null)));
+    const items = snapshot.docs
+      .map((doc) => {
+        const data = doc.data();
+        const fallback = userCache[data.userId] || {};
+        const preview = getSharedListPreview(data);
 
-  const allLists = snapshot.docs.map((doc, i) => {
-    const data = doc.data();
-    const listDoc = listDetails[i];
-    const fallback = userCache[data.userId] || {};
-    let listItems = [];
-    let listCount = 0;
-    let currentListName = data.listName;
-
-    if (listDoc && listDoc.exists) {
-      const listData = listDoc.data();
-      currentListName = listData.name;
-      listCount = listData.items?.length || 0;
-      listItems = listData.items?.slice(0, 4) || [];
-    }
+        return {
+          id: doc.id,
+          username: safeUsername(data.username) || safeUsername(fallback.username) || "Usuário",
+          userPhoto: data.userPhoto || fallback.userPhoto || null,
+          listName: preview.listName,
+          listCount: preview.listCount,
+          listItems: preview.listItems,
+          attachmentId: data.listId,
+          createdAt: data.createdAt,
+          type: "list_share",
+          content: data.content,
+          likesCount: data.likesCount || 0,
+        };
+      })
+      .sort((a, b) => getCreatedAtMillis(b.createdAt) - getCreatedAtMillis(a.createdAt));
 
     return {
-      id: doc.id,
-      username: safeUsername(data.username) || safeUsername(fallback.username) || 'Usuário',
-      userPhoto: data.userPhoto || fallback.userPhoto || null,
-      listName: currentListName,
-      listCount,
-      listItems,
-      attachmentId: data.listId,
-      createdAt: data.createdAt,
-      type: 'list_share',
-      content: data.content,
-      likesCount: data.likesCount || 0
+      items,
+      hasMore: snapshot.docs.length === FEED_PAGE_SIZE,
+      nextCursor: buildCursorFromItems(items),
     };
   });
 
-  allLists.sort(
-    (a, b) =>
-      (b.createdAt?.toDate?.() || new Date(b.createdAt)) -
-      (a.createdAt?.toDate?.() || new Date(a.createdAt))
-  );
-
-  res.status(200).json(allLists.slice(offset, offset + limit));
+  res.status(200).json(payload);
 });
