@@ -2,6 +2,10 @@ const { z } = require('zod');
 
 const nameRegex = /^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$/;
 const passwordRegex = /^(?=.*[A-Z])(?=.*[!@#$&*.,?_~\-]).{6,}$/;
+const safeUrlSchema = z
+  .string()
+  .url('URL inválida.')
+  .refine((value) => value.startsWith('https://'), 'A URL deve usar HTTPS.');
 
 const registerSchema = z.object({
   name: z.string().min(2).max(50).regex(nameRegex),
@@ -21,8 +25,8 @@ const profileSchema = z.object({
   name: z.string().min(2).max(50).regex(nameRegex).optional(),
   username: z.string().min(3).max(30).regex(/^[a-z0-9_]+$/).optional(),
   bio: z.string().max(300).optional(),
-  photoURL: z.string().optional(),
-  backgroundURL: z.string().optional(),
+  photoURL: safeUrlSchema.optional(),
+  backgroundURL: safeUrlSchema.optional(),
 });
 
 const reviewSchema = z.object({
@@ -35,10 +39,29 @@ const reviewSchema = z.object({
   backdropPath: z.string().nullable().optional(),
 });
 
-const commentSchema = z.object({
-  reviewId: z.string(),
-  text: z.string().min(1).max(1000),
-  parentId: z.string().nullable().optional(),
+const reviewUpdateSchema = z.object({
+  text: z.string().max(2000).optional(),
+  rating: z.number().min(0).max(10).optional().nullable(),
+});
+
+const commentSchema = z
+  .object({
+    reviewId: z.string(),
+    text: z.string().max(1000).optional().default(''),
+    parentId: z.string().nullable().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (!data.text?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Comentário deve ter texto.',
+        path: ['text'],
+      });
+    }
+  });
+
+const commentUpdateSchema = z.object({
+  text: z.string().trim().min(1, 'Comentário deve ter texto.').max(1000),
 });
 
 const listSchema = z.object({
@@ -53,11 +76,20 @@ const addToListSchema = z.object({
   mediaItem: z.object({
     id: z.union([z.number(), z.string()]),
     title: z.string().optional(),
+    name: z.string().optional(),
     poster_path: z.string().nullable().optional(),
     backdrop_path: z.string().nullable().optional(),
     media_type: z.string().optional(),
     vote_average: z.number().optional(),
+    release_date: z.string().nullable().optional(),
+    first_air_date: z.string().nullable().optional(),
+    year: z.string().nullable().optional(),
   }),
+});
+
+const supportTicketSchema = z.object({
+  subject: z.enum(['SUGESTAO', 'BUG_REPORT', 'PROBLEMA_CONTA', 'DENUNCIA', 'OUTRO_ASSUNTO']),
+  message: z.string().trim().min(10, 'A mensagem deve ter pelo menos 10 caracteres.').max(1000, 'A mensagem pode ter no máximo 1000 caracteres.'),
 });
 
 module.exports = {
@@ -65,7 +97,10 @@ module.exports = {
   loginSchema,
   profileSchema,
   reviewSchema,
+  reviewUpdateSchema,
   commentSchema,
+  commentUpdateSchema,
   listSchema,
   addToListSchema,
+  supportTicketSchema,
 };
