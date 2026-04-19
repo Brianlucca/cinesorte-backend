@@ -51,12 +51,12 @@ const notifyMentions = async (mentionsArray, senderId, senderName, senderUsernam
         await db.collection("notifications").add({
           recipientId: targetUserId,
           senderId: senderId,
-          senderName: senderName || "UsuÃƒÂ¡rio",
+          senderName: senderName || "Usuário",
           senderUsername: senderUsername || null,
           senderPhoto: senderPhoto || null,
           type: "mention",
-          title: "VocÃƒÂª foi mencionado!",
-          message: `@${senderUsername || senderName || "alguÃƒÂ©m"} mencionou vocÃƒÂª.`,
+          title: "Você foi mencionado!",
+          message: `@${senderUsername || senderName || "alguém"} mencionou você.`,
           mediaId: mediaId,
           mediaType: mediaType,
           reviewId: reviewId || null,
@@ -71,9 +71,9 @@ const notifyMentions = async (mentionsArray, senderId, senderName, senderUsernam
 };
 
 const ELITE_TITLES = [
-  "Mestre da CrÃƒÂ­tica",
-  "OrÃƒÂ¡culo da SÃƒÂ©tima Arte",
-  "Entidade CinematogrÃƒÂ¡fica",
+  "Mestre da Crítica",
+  "Oráculo da Sétima Arte",
+  "Entidade Cinematográfica",
   "Divindade do Cinema",
 ];
 
@@ -85,7 +85,7 @@ exports.addReview = catchAsync(async (req, res, next) => {
   } = req.body;
 
   if (text && containsProfanity(text))
-    return next(new AppError("ConteÃƒÂºdo imprÃƒÂ³prio.", 400));
+    return next(new AppError("Conteúdo impróprio.", 400));
 
   const userRef = db.collection("users").doc(uid);
   let levelUpInfo = null;
@@ -135,7 +135,7 @@ exports.addReview = catchAsync(async (req, res, next) => {
       userId: uid,
       mediaId: mediaId.toString(),
       mediaType,
-      mediaTitle: mediaTitle || "TÃƒÂ­tulo Desconhecido",
+      mediaTitle: mediaTitle || "Título Desconhecido",
       posterPath: posterPath || "",
       backdropPath: backdropPath || "",
       rating: rating !== undefined ? rating : null,
@@ -173,8 +173,8 @@ exports.addReview = catchAsync(async (req, res, next) => {
     await db.collection("notifications").add({
       recipientId: uid,
       type: "level_up",
-      title: "Novo NÃƒÂ­vel!",
-      message: `VocÃƒÂª alcanÃƒÂ§ou o nÃƒÂ­vel ${levelUpInfo.level} - ${levelUpInfo.title}!`,
+      title: "Novo Nível!",
+      message: `Você alcançou o nível ${levelUpInfo.level} - ${levelUpInfo.title}!`,
       read: false,
       createdAt: new Date(),
       icon: "TrendingUp",
@@ -206,13 +206,13 @@ exports.updateReview = catchAsync(async (req, res, next) => {
   const { text, rating } = req.body;
 
   if (text && containsProfanity(text))
-    return next(new AppError("ConteÃƒÂºdo imprÃƒÂ³prio.", 400));
+    return next(new AppError("Conteúdo impróprio.", 400));
 
   const reviewRef = db.collection("reviews").doc(reviewId);
   const doc = await reviewRef.get();
 
-  if (!doc.exists) return next(new AppError("Review nÃƒÂ£o encontrada.", 404));
-  if (doc.data().userId !== uid) return next(new AppError("Sem permissÃƒÂ£o.", 403));
+  if (!doc.exists) return next(new AppError("Review não encontrada.", 404));
+  if (doc.data().userId !== uid) return next(new AppError("Sem permissão.", 403));
 
   const oldData = doc.data();
   const batch = db.batch();
@@ -260,8 +260,8 @@ exports.deleteReview = catchAsync(async (req, res, next) => {
 
   const reviewRef = db.collection("reviews").doc(reviewId);
   const doc = await reviewRef.get();
-  if (!doc.exists) return next(new AppError("NÃƒÂ£o encontrada.", 404));
-  if (doc.data().userId !== uid) return next(new AppError("Sem permissÃƒÂ£o.", 403));
+  if (!doc.exists) return next(new AppError("Não encontrada.", 404));
+  if (doc.data().userId !== uid) return next(new AppError("Sem permissão.", 403));
 
   const userRef = db.collection("users").doc(uid);
 
@@ -317,7 +317,7 @@ exports.toggleLikeReview = catchAsync(async (req, res, next) => {
     const likeRef = reviewRef.collection("likes").doc(uid);
     const doc = await t.get(likeRef);
     const reviewDoc = await t.get(reviewRef);
-    if (!reviewDoc.exists) throw new Error("Review nÃƒÂ£o encontrada");
+    if (!reviewDoc.exists) throw new Error("Review não encontrada");
 
     const reviewData = reviewDoc.data();
     const currentLikes = reviewData.likesCount || 0;
@@ -329,7 +329,7 @@ exports.toggleLikeReview = catchAsync(async (req, res, next) => {
     } else {
       t.set(likeRef, {
         userId: uid,
-        name: name || "UsuÃƒÂ¡rio",
+        name: name || "Usuário",
         photoURL: photoURL || null,
         createdAt: new Date(),
       });
@@ -339,12 +339,12 @@ exports.toggleLikeReview = catchAsync(async (req, res, next) => {
         notificationData = {
           recipientId: reviewData.userId,
           senderId: uid,
-          senderName: username || "UsuÃƒÂ¡rio",
+          senderName: username || "Usuário",
           senderUsername: username || null,
           senderPhoto: photoURL || null,
           type: "new_content",
           title: "Nova Curtida",
-          message: `${username || "AlguÃƒÂ©m"} curtiu sua review de ${reviewData.mediaTitle}.`,
+          message: `${username || "Alguém"} curtiu sua review de ${reviewData.mediaTitle}.`,
           mediaId: reviewData.mediaId,
           mediaType: reviewData.mediaType,
           read: false,
@@ -368,7 +368,7 @@ exports.addComment = catchAsync(async (req, res, next) => {
   const { uid, username } = req.user;
   const { reviewId, text, parentId } = req.body;
   if (containsProfanity(text))
-    return next(new AppError("ConteÃƒÂºdo imprÃƒÂ³prio.", 400));
+    return next(new AppError("Conteúdo impróprio.", 400));
 
   const parentCommentPromise = parentId ? db.collection("comments").doc(parentId).get() : Promise.resolve(null);
   const [userDoc, reviewDoc, parentCommentDoc] = await Promise.all([
@@ -377,7 +377,7 @@ exports.addComment = catchAsync(async (req, res, next) => {
       parentCommentPromise,
     ]);
 
-  if (!reviewDoc.exists) return next(new AppError("Review nÃƒÂ£o encontrada.", 404));
+  if (!reviewDoc.exists) return next(new AppError("Review n\u00e3o encontrada.", 404));
 
     const userData = userDoc.data() || {};
     const reviewData = reviewDoc.data();
@@ -386,7 +386,7 @@ exports.addComment = catchAsync(async (req, res, next) => {
   const commentData = {
     reviewId,
     userId: uid,
-    username: safeUsername(userData.username) || "UsuÃƒÂ¡rio",
+    username: safeUsername(userData.username) || "Usuário",
     userPhoto: userData.photoURL || null,
     text,
     parentId: parentId || null,
@@ -408,11 +408,11 @@ exports.addComment = catchAsync(async (req, res, next) => {
     await db.collection("notifications").add({
       recipientId: reviewData.userId,
       senderId: uid,
-      senderName: safeUsername(userData.username) || "UsuÃƒÂ¡rio",
+      senderName: safeUsername(userData.username) || "Usu\u00e1rio",
       senderUsername: username || null,
       senderPhoto: userData.photoURL || null,
       type: "new_content",
-      title: "Novo ComentÃƒÂ¡rio",
+      title: "Novo Comentário",
       message: `${safeUsername(userData.username) || "Alguém"} ${parentId ? "respondeu" : "comentou"} na sua review de ${reviewData.mediaTitle || "um título"}.`,
       mediaId: reviewData.mediaId,
       mediaType: reviewData.mediaType,
@@ -468,8 +468,8 @@ exports.addComment = catchAsync(async (req, res, next) => {
             if (recipient.type === "review_owner") {
               await sendReviewCommentEmail({
                 userEmail: recipientData.email,
-                userName: recipientData.name || recipientData.username || "cinÃƒÂ©filo",
-                senderName: safeUsername(userData.username) || "AlguÃƒÂ©m",
+                userName: recipientData.name || recipientData.username || "cinéfilo",
+                senderName: safeUsername(userData.username) || "Alguém",
                 senderUsername: username || null,
                 mediaTitle: reviewData.mediaTitle || null,
                 mediaType: reviewData.mediaType || null,
@@ -481,8 +481,8 @@ exports.addComment = catchAsync(async (req, res, next) => {
 
             await sendCommentReplyEmail({
               userEmail: recipientData.email,
-              userName: recipientData.name || recipientData.username || "cinÃƒÂ©filo",
-              senderName: safeUsername(userData.username) || "AlguÃƒÂ©m",
+              userName: recipientData.name || recipientData.username || "cinéfilo",
+              senderName: safeUsername(userData.username) || "Alguém",
               senderUsername: username || null,
               mediaTitle: reviewData.mediaTitle || null,
               mediaType: reviewData.mediaType || null,
@@ -513,13 +513,13 @@ exports.updateComment = catchAsync(async (req, res, next) => {
   const { text } = req.body;
 
   if (text && containsProfanity(text))
-    return next(new AppError("ConteÃƒÂºdo imprÃƒÂ³prio.", 400));
+    return next(new AppError("Conteúdo impróprio.", 400));
 
   const commentRef = db.collection("comments").doc(commentId);
   const doc = await commentRef.get();
 
-  if (!doc.exists) return next(new AppError("ComentÃƒÂ¡rio nÃƒÂ£o encontrado.", 404));
-  if (doc.data().userId !== uid) return next(new AppError("Sem permissÃƒÂ£o.", 403));
+  if (!doc.exists) return next(new AppError("Comentário não encontrado.", 404));
+  if (doc.data().userId !== uid) return next(new AppError("Sem permissão.", 403));
 
   const oldData = doc.data();
   const batch = db.batch();
@@ -554,7 +554,7 @@ exports.updateComment = catchAsync(async (req, res, next) => {
     );
   }
 
-  res.status(200).json({ message: "ComentÃƒÂ¡rio atualizado." });
+  res.status(200).json({ message: "Comentário atualizado." });
 });
 
 exports.deleteComment = catchAsync(async (req, res, next) => {
@@ -563,7 +563,7 @@ exports.deleteComment = catchAsync(async (req, res, next) => {
 
   const ref = db.collection("comments").doc(commentId);
   const doc = await ref.get();
-  if (!doc.exists) return next(new AppError("NÃƒÂ£o encontrado.", 404));
+  if (!doc.exists) return next(new AppError("Não encontrado.", 404));
   if (doc.data().userId !== uid) return next(new AppError("Proibido.", 403));
 
   const batch = db.batch();
@@ -609,7 +609,7 @@ exports.getMediaReviews = catchAsync(async (req, res, next) => {
       likesCount: data.likesCount || 0,
       commentsCount: data.commentsCount || 0,
       createdAt: data.createdAt,
-      username: safeUsername(data.username) || safeUsername(fallback.username) || "UsuÃƒÂ¡rio",
+      username: safeUsername(data.username) || safeUsername(fallback.username) || "Usuário",
       userPhoto: data.userPhoto || fallback.userPhoto || null,
       levelTitle: data.levelTitle || null,
       isEliteReview: data.isEliteReview || false,
@@ -803,7 +803,7 @@ exports.getComments = catchAsync(async (req, res, next) => {
     return {
       id: d.id,
       reviewId: data.reviewId,
-      username: safeUsername(data.username) || safeUsername(fallback.username) || "UsuÃƒÂ¡rio",
+      username: safeUsername(data.username) || safeUsername(fallback.username) || "Usuário",
       userPhoto: data.userPhoto || fallback.userPhoto || null,
       text: data.text,
       parentId: data.parentId || null,
