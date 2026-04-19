@@ -1,0 +1,214 @@
+const crypto = require("crypto");
+const nodemailer = require("nodemailer");
+const env = require("../../config/env");
+const logger = require("../../utils/logger");
+const { db, admin } = require("../../config/firebase");
+
+const EMAIL_JOB_COLLECTION = "email_jobs";
+const MAX_INLINE_ATTEMPTS = 3;
+const MAX_QUEUE_ATTEMPTS = Number(env.EMAIL_RETRY_MAX_ATTEMPTS || 5);
+
+const hasSmtpConfig = () =>
+  Boolean(env.SMTP_HOST && env.SMTP_PORT && env.SMTP_USER && env.SMTP_PASS);
+
+let transporter = null;
+
+const getTransporter = () => {
+  if (!hasSmtpConfig()) {
+    return null;
+  }
+
+  if (!transporter) {
+    transporter = nodemailer.createTransport({
+      host: env.SMTP_HOST,
+      port: Number(env.SMTP_PORT),
+      secure: String(env.SMTP_SECURE).toLowerCase() === "true",
+      auth: {
+        user: env.SMTP_USER,
+        pass: env.SMTP_PASS,
+      },
+      connectionTimeout: 20000,
+      greetingTimeout: 20000,
+      socketTimeout: 30000,
+    });
+  }
+
+  return transporter;
+};
+
+const getFromEmail = () => env.SUPPORT_FROM_EMAIL || env.SMTP_USER;
+const getSupportInbox = () => env.SUPPORT_TO_EMAIL || env.SMTP_USER;
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const buildMailOptions = ({ to, subject, text, html, replyTo, threadMessageId, priority }) => {
+  const isHighPriority = priority === "high";
+
+  return {
+    from: getFromEmail(),
+    to,
+    subject,
+    text,
+    html,
+    replyTo,
+    inReplyTo: threadMessageId || undefined,
+    references: threadMessageId || undefined,
+    priority: isHighPriority ? "high" : undefined,
+    headers: isHighPriority
+      ? {
+          Importance: "high",
+          "X-Priority": "1",
+          Priority: "urgent",
+        }
+      : undefined,
+  };
+};
+
+const sendMailNow = async (payload) => {
+  const transport = getTransporter();
+  if (!transport) {
+    return { skipped: true, reason: "smtp_not_configured" };
+  }
+
+  if (!payload?.to) {
+    return { skipped: true, reason: "missing_recipient" };
+  }
+
+  const info = await transport.sendMail(buildMailOptions(payload));
+  return {
+    skipped: false,
+    sent: true,
+    messageId: info?.messageId || null,
+  };
+};
+
+const buildJobHash = (payload) =>
+  crypto
+    .createHash("sha1")
+    .update(JSON.stringify({
+      to: payload.to,
+      subject: payload.subject,
+      text: payload.text,
+      html: payload.html,
+      replyTo: payload.replyTo,
+      threadMessageId: payload.threadMessageId,
+      logLabel: payload.logLabel,
+    }))
+    .digest("hex");
+
+const queueEmailJob = async (payload, errorMessage) => {
+  const dedupeHash = buildJobHash(payload);
+  const existing = await db.collection(EMAIL_JOB_COLLECTION).where("dedupeHash", "==", dedupeHash).where("status", "in", ["pending", "retrying"]).limit(1).get();
+
+  if (!existing.empty) {
+    const doc = existing.docs[0];
+    await doc.ref.update({
+      updatedAt: admin.firestore.Timestamp.now(),
+      lastError: errorMessage,
+    });
+    return { queued: true, jobId: doc.id, deduplicated: true };
+  }
+
+  const now = admin.firestore.Timestamp.now();
+  const docRef = db.collection(EMAIL_JOB_COLLECTION).doc();
+  await docRef.set({
+    payload,
+    dedupeHash,
+    status: "pending",
+    attempts: 0,
+    queuedAt: now,
+    updatedAt: now,
+    nextAttemptAt: now,
+    lastError: errorMessage || null,
+  });
+
+  return { queued: true, jobId: docRef.id, deduplicated: false };
+};
+
+const sendMail = async (payload) => {
+  if (!hasSmtpConfig()) {
+    return { skipped: true, reason: "smtp_not_configured" };
+  }
+
+  if (!payload?.to) {
+    return { skipped: true, reason: "missing_recipient" };
+  }
+
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= MAX_INLINE_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await sendMailNow(payload);
+      if (attempt > 1) {
+        logger.info("%s succeeded after retry %s", payload.logLabel || "email_delivery", attempt);
+      }
+      return { ...result, queued: false, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+      logger.warn("%s attempt %s failed: %s", payload.logLabel || "email_delivery", attempt, error.message || error);
+      if (attempt < MAX_INLINE_ATTEMPTS) {
+        await wait(1200 * attempt);
+      }
+    }
+  }
+
+  const errorMessage = lastError?.message || String(lastError || "unknown_error");
+  const queueResult = await queueEmailJob(payload, errorMessage);
+  logger.error("%s failed after retries and was queued: %s", payload.logLabel || "email_delivery", errorMessage);
+  return {
+    skipped: false,
+    sent: false,
+    queued: true,
+    error: errorMessage,
+    jobId: queueResult.jobId,
+  };
+};
+
+const processEmailJob = async (jobDoc) => {
+  const data = jobDoc.data() || {};
+  const attempts = Number(data.attempts || 0) + 1;
+  const payload = data.payload || {};
+
+  try {
+    const result = await sendMailNow(payload);
+    await jobDoc.ref.update({
+      status: "sent",
+      attempts,
+      sentAt: admin.firestore.Timestamp.now(),
+      updatedAt: admin.firestore.Timestamp.now(),
+      messageId: result.messageId || null,
+      lastError: null,
+    });
+    logger.info("queued email sent: %s", payload.logLabel || jobDoc.id);
+  } catch (error) {
+    const shouldFailPermanently = attempts >= MAX_QUEUE_ATTEMPTS;
+    const delayMinutes = Math.min(30, attempts * 2);
+    const nextAttemptAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + delayMinutes * 60 * 1000));
+
+    await jobDoc.ref.update({
+      status: shouldFailPermanently ? "failed" : "retrying",
+      attempts,
+      updatedAt: admin.firestore.Timestamp.now(),
+      nextAttemptAt,
+      lastError: error.message || String(error),
+    });
+
+    if (shouldFailPermanently) {
+      logger.error("queued email permanently failed: %s", payload.logLabel || jobDoc.id);
+    } else {
+      logger.warn("queued email retry scheduled: %s", payload.logLabel || jobDoc.id);
+    }
+  }
+};
+
+module.exports = {
+  EMAIL_JOB_COLLECTION,
+  hasSmtpConfig,
+  getTransporter,
+  getFromEmail,
+  getSupportInbox,
+  processEmailJob,
+  queueEmailJob,
+  sendMail,
+  sendMailNow,
+};
