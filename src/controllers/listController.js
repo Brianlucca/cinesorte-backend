@@ -1,8 +1,83 @@
 const { db } = require("../config/firebase");
 const admin = require("firebase-admin");
+const tmdbApi = require("../api/tmdb");
 const { containsProfanity } = require("../utils/profanity");
 const catchAsync = require("../utils/catchAsync");
 const AppError = require("../utils/AppError");
+const { deleteByPrefix } = require("../services/cacheService");
+
+const hasYearData = (item = {}) =>
+  Boolean(
+    item.year ||
+      item.release_date ||
+      item.first_air_date ||
+      item.releaseDate ||
+      item.firstAirDate,
+  );
+
+const enrichListItemWithYear = async (item = {}) => {
+  if (!item?.id || hasYearData(item)) {
+    return item;
+  }
+
+  const mediaType = item.media_type || (item.title ? "movie" : "tv");
+
+  try {
+    const response = await tmdbApi.get(`/${mediaType}/${item.id}`, {
+      params: { language: "pt-BR" },
+    });
+
+    const releaseDate =
+      response.data?.release_date || item.release_date || item.releaseDate || null;
+    const firstAirDate =
+      response.data?.first_air_date ||
+      item.first_air_date ||
+      item.firstAirDate ||
+      null;
+    const year = (releaseDate || firstAirDate || "").split("-")[0] || null;
+
+    return {
+      ...item,
+      title: item.title || response.data?.title || response.data?.name || "Sem título",
+      name: item.name || response.data?.name || response.data?.title || item.title || "Sem título",
+      release_date: releaseDate,
+      first_air_date: firstAirDate,
+      year,
+    };
+  } catch (error) {
+    return item;
+  }
+};
+
+const enrichItemsIfNeeded = async (listRef, items = []) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return items;
+  }
+
+  let changed = false;
+  const enrichedItems = await Promise.all(
+    items.map(async (item) => {
+      if (hasYearData(item)) {
+        return item;
+      }
+
+      const enrichedItem = await enrichListItemWithYear(item);
+      if (enrichedItem !== item && hasYearData(enrichedItem)) {
+        changed = true;
+      }
+      return enrichedItem;
+    }),
+  );
+
+  if (changed && listRef) {
+    await listRef.update({
+      items: enrichedItems,
+      updatedAt: new Date(),
+    });
+  }
+
+  return enrichedItems;
+};
 
 exports.upsertList = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
@@ -125,11 +200,17 @@ exports.addMediaToList = catchAsync(async (req, res, next) => {
 
   const safeMediaItem = {
     id: mediaItem.id,
-    title: mediaItem.title || "Sem título",
+    title: mediaItem.title || mediaItem.name || "Sem título",
+    name: mediaItem.name || mediaItem.title || "Sem título",
     poster_path: mediaItem.poster_path || null,
     backdrop_path: mediaItem.backdrop_path || null,
     media_type: mediaItem.media_type || "movie",
     vote_average: mediaItem.vote_average || 0,
+    release_date: mediaItem.release_date || null,
+    first_air_date: mediaItem.first_air_date || null,
+    year:
+      (mediaItem.release_date || mediaItem.first_air_date || "").split("-")[0] ||
+      null,
     addedAt: new Date(),
   };
 
@@ -173,13 +254,15 @@ exports.getUserLists = catchAsync(async (req, res, next) => {
   if (!isOwner) query = query.where("isPublic", "==", true);
 
   const snapshot = await query.get();
-  let lists = snapshot.docs.map((doc) => {
+  let lists = await Promise.all(snapshot.docs.map(async (doc) => {
     const data = doc.data();
+    const items = await enrichItemsIfNeeded(doc.ref, data.items || []);
+
     return {
       id: doc.id,
       name: data.name,
       description: data.description || "",
-      items: data.items || [],
+      items,
       savesCount: data.savesCount || 0,
       isPublic: data.isPublic,
       createdAt: data.createdAt?.toDate
@@ -189,7 +272,7 @@ exports.getUserLists = catchAsync(async (req, res, next) => {
         ? data.updatedAt.toDate()
         : data.updatedAt,
     };
-  });
+  }));
 
   lists.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   res.status(200).json(lists);
@@ -218,6 +301,7 @@ exports.getPublicListDetails = catchAsync(async (req, res, next) => {
 
   const listData = listDoc.data();
   if (!listData.isPublic) return next(new AppError("Esta lista é privada.", 403));
+  const items = await enrichItemsIfNeeded(listDoc.ref, listData.items || []);
 
   let clonedFrom = null;
 
@@ -245,7 +329,7 @@ exports.getPublicListDetails = catchAsync(async (req, res, next) => {
     id: listId,
     name: listData.name,
     description: listData.description || "",
-    items: listData.items || [],
+    items,
     savesCount: listData.savesCount || 0,
     isPublic: listData.isPublic,
     createdAt: listData.createdAt?.toDate
@@ -324,6 +408,7 @@ exports.shareList = catchAsync(async (req, res, next) => {
     listId: listId,
     listName: listData.name,
     listItems: listData.items || [],
+    listCount: Array.isArray(listData.items) ? listData.items.length : 0,
     content: content || `Confira minha nova coleção: ${listData.name}`,
     type: "list_share",
     createdAt: new Date(),
@@ -332,6 +417,7 @@ exports.shareList = catchAsync(async (req, res, next) => {
   };
 
   const docRef = await db.collection("shared_lists").add(newShare);
+  await deleteByPrefix("feed:");
   res
     .status(201)
     .json({ id: docRef.id, message: "Coleção compartilhada com sucesso!" });
