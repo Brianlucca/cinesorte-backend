@@ -14,6 +14,7 @@ const {
 const { startBotListener } = require("./services/telegramService");
 const { startSupportInboxListener } = require("./services/supportInboxService");
 const { startEmailRetryWorker } = require("./services/email/retryWorker");
+const { startVerificationEmailRescueWorker } = require("./services/emailVerificationRescueWorker");
 
 const tmdbRoutes = require("./routes/tmdbRoutes");
 const interactionRoutes = require("./routes/interactionRoutes");
@@ -101,6 +102,7 @@ if (require.main === module) {
       startBotListener();
       startSupportInboxListener();
       startEmailRetryWorker();
+      startVerificationEmailRescueWorker();
     }
   });
 }
