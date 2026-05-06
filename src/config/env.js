@@ -8,7 +8,6 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_CHAT_ID: z.string().min(1),
-  REDIS_URL: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
   SUPPORT_FROM_EMAIL: z.string().email().optional(),
   SUPPORT_TO_EMAIL: z.string().email().optional(),
@@ -25,6 +24,13 @@ const envSchema = z.object({
   IMAP_POLL_INTERVAL_MS: z.string().optional(),
   EMAIL_RETRY_INTERVAL_MS: z.string().optional(),
   EMAIL_RETRY_MAX_ATTEMPTS: z.string().optional(),
+  VERIFICATION_EMAIL_RESCUE_ENABLED: z.string().optional(),
+  VERIFICATION_EMAIL_RESCUE_INTERVAL_MS: z.string().optional(),
+  VERIFICATION_EMAIL_RESCUE_LIMIT: z.string().optional(),
+  VERIFICATION_EMAIL_RESCUE_MIN_AGE_MINUTES: z.string().optional(),
+  VERIFICATION_EMAIL_RESCUE_COOLDOWN_HOURS: z.string().optional(),
+  VERIFICATION_EMAIL_RESCUE_MAX_SENDS: z.string().optional(),
+  MEMORY_CACHE_MAX_ENTRIES: z.string().optional(),
 });
 
 const env = envSchema.parse(process.env);
