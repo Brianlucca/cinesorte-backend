@@ -122,7 +122,9 @@ exports.addReview = catchAsync(async (req, res, next) => {
   } = req.body;
 
   if (text && containsProfanity(text))
-    return next(new AppError("Conteúdo impróprio.", 400));
+    return next(
+      new AppError("A review contém conteúdo impróprio. Revise o texto.", 400)
+    );
 
   const userRef = db.collection("users").doc(uid);
   let levelUpInfo = null;
@@ -244,7 +246,9 @@ exports.updateReview = catchAsync(async (req, res, next) => {
   const { text, rating } = req.body;
 
   if (text && containsProfanity(text))
-    return next(new AppError("Conteúdo impróprio.", 400));
+    return next(
+      new AppError("A review contém conteúdo impróprio. Revise o texto.", 400)
+    );
 
   const reviewRef = db.collection("reviews").doc(reviewId);
   const doc = await reviewRef.get();
@@ -407,7 +411,9 @@ exports.addComment = catchAsync(async (req, res, next) => {
   const { uid, username } = req.user;
   const { reviewId, text, parentId } = req.body;
   if (containsProfanity(text))
-    return next(new AppError("Conteúdo impróprio.", 400));
+    return next(
+      new AppError("O comentário contém conteúdo impróprio. Revise o texto.", 400)
+    );
 
   const parentCommentPromise = parentId ? db.collection("comments").doc(parentId).get() : Promise.resolve(null);
   const [userDoc, reviewDoc, parentCommentDoc] = await Promise.all([
@@ -556,7 +562,9 @@ exports.updateComment = catchAsync(async (req, res, next) => {
   const { text } = req.body;
 
   if (text && containsProfanity(text))
-    return next(new AppError("Conteúdo impróprio.", 400));
+    return next(
+      new AppError("O comentário contém conteúdo impróprio. Revise o texto.", 400)
+    );
 
   const commentRef = db.collection("comments").doc(commentId);
   const doc = await commentRef.get();

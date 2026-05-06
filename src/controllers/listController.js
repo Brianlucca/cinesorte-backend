@@ -83,11 +83,12 @@ exports.upsertList = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
   const { listId, listName, description, isPublic } = req.body;
 
-  if (
-    containsProfanity(listName) ||
-    (description && containsProfanity(description))
-  ) {
-    return next(new AppError("Nome ou descrição impróprios.", 400));
+  if (containsProfanity(listName)) {
+    return next(new AppError("O nome da lista contém conteúdo impróprio. Revise esse campo.", 400));
+  }
+
+  if (description && containsProfanity(description)) {
+    return next(new AppError("A descrição da lista contém conteúdo impróprio. Revise esse campo.", 400));
   }
 
   const id =

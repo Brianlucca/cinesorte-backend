@@ -328,8 +328,12 @@ exports.register = catchAsync(async (req, res, next) => {
   const turnstileValid = await verifyTurnstile(turnstileToken, req.ip);
   if (!turnstileValid) return next(new AppError("Verificação de segurança falhou.", 400));
 
-  if (containsProfanity(name) || containsProfanity(nickname)) {
-    return next(new AppError("Nome ou nickname impróprio.", 400));
+  if (containsProfanity(name)) {
+    return next(new AppError("O nome contém conteúdo impróprio. Revise esse campo.", 400));
+  }
+
+  if (containsProfanity(nickname)) {
+    return next(new AppError("O nickname contém conteúdo impróprio. Revise esse campo.", 400));
   }
 
   const checkUser = await db.collection("users").where("username", "==", nickname).limit(1).get();
@@ -675,8 +679,12 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
   const { bio, photoURL, backgroundURL, username } = req.body;
 
-  if ((bio && containsProfanity(bio)) || (username && containsProfanity(username))) {
-    return next(new AppError("Conteúdo impróprio.", 400));
+  if (bio && containsProfanity(bio)) {
+    return next(new AppError("A biografia contém conteúdo impróprio. Revise esse campo.", 400));
+  }
+
+  if (username && containsProfanity(username)) {
+    return next(new AppError("O username contém conteúdo impróprio. Revise esse campo.", 400));
   }
 
   const userRef = db.collection("users").doc(uid);
