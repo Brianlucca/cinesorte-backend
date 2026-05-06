@@ -54,22 +54,9 @@ const buildFollowNotificationEmail = ({
     title: "Você ganhou um novo seguidor",
     intro: `${followerDisplay}${followerHandle ? ` (${followerHandle})` : ""} começou a seguir você no CineSorte.`,
     eyebrow: "Novo seguidor",
-    heroLabel: "Comunidade em movimento",
-    heroImage: `${appUrl}/preview2.png`,
     theme: "follow",
-    actions: [{ label: "Ver perfil de quem seguiu", href: followerUsername ? `${appUrl}/app/profile/${followerUsername}` : profileUrl }],
-    sections: [
-      {
-        type: "list",
-        title: "O que você pode fazer agora",
-        items: [
-          "Conferir quem começou a te seguir",
-          "Visitar o perfil e descobrir os gostos da pessoa",
-          "Acompanhar sua comunidade de perto",
-        ],
-      },
-    ],
-    footerNote: "Este email é automático e foi enviado porque alguém interagiu com o seu perfil.",
+    actions: [{ label: "Ver perfil", href: followerUsername ? `${appUrl}/app/profile/${followerUsername}` : profileUrl }],
+    footerNote: "Você recebeu este email por causa de uma interação no seu perfil.",
   });
 
   return {
@@ -111,10 +98,8 @@ const buildReviewCommentEmail = ({
     title: "Nova resposta em uma review sua",
     intro: `${senderDisplay}${senderUsername ? ` (@${senderUsername})` : ""} comentou em uma review sua no CineSorte.`,
     eyebrow: "Nova interação",
-    heroLabel: mediaTitle || "Discussão em andamento",
     theme: "reply",
-    heroImage: `${appUrl}/preview.png`,
-    actions: [{ label: "Ir até a review", href: buildMediaUrl(mediaType, mediaId) }],
+    actions: [{ label: "Abrir review", href: buildMediaUrl(mediaType, mediaId) }],
     sections: [
       mediaTitle
         ? {
@@ -133,7 +118,7 @@ const buildReviewCommentEmail = ({
             body: "Entre no CineSorte para ver a nova interação em detalhes.",
           },
     ],
-    footerNote: "Este email é automático e foi enviado porque houve uma nova interação em uma review sua.",
+    footerNote: "Você recebeu este email por causa de uma interação em uma review sua.",
   });
 
   return {
@@ -177,10 +162,8 @@ const buildCommentReplyEmail = ({
     title: "Responderam um comentário seu",
     intro: `${senderDisplay}${senderUsername ? ` (@${senderUsername})` : ""} respondeu um comentário seu no CineSorte.`,
     eyebrow: "Nova resposta",
-    heroLabel: mediaTitle || "Conversa em andamento",
     theme: "reply",
-    heroImage: `${appUrl}/preview2.png`,
-    actions: [{ label: "Ir até a review", href: buildMediaUrl(mediaType, mediaId) }],
+    actions: [{ label: "Abrir conversa", href: buildMediaUrl(mediaType, mediaId) }],
     sections: [
       mediaTitle
         ? {
@@ -199,7 +182,7 @@ const buildCommentReplyEmail = ({
             body: "Entre no CineSorte para acompanhar a conversa.",
           },
     ],
-    footerNote: "Este email é automático e foi enviado porque alguém respondeu um comentário seu.",
+    footerNote: "Você recebeu este email porque alguém respondeu um comentário seu.",
   });
 
   return {
@@ -208,6 +191,47 @@ const buildCommentReplyEmail = ({
     text,
     html,
     logLabel: "comment_reply_email",
+  };
+};
+
+const buildMentionNotificationEmail = ({
+  userEmail,
+  userName,
+  senderName,
+  senderUsername,
+  mediaTitle,
+  mediaType,
+  mediaId,
+}) => {
+  const displayName = userName || "cinéfilo";
+  const senderDisplay = senderName || senderUsername || "Alguém";
+  const senderHandle = senderUsername ? `@${senderUsername}` : null;
+
+  const text = [
+    `Olá, ${displayName}.`,
+    "",
+    `${senderDisplay}${senderHandle ? ` (${senderHandle})` : ""} mencionou você no CineSorte${mediaTitle ? ` em ${mediaTitle}` : ""}.`,
+    "",
+    buildMediaUrl(mediaType, mediaId),
+    "",
+    "Equipe CineSorte",
+  ].join("\n");
+
+  const html = buildEmailLayout({
+    title: "Você foi mencionado",
+    intro: `${senderDisplay}${senderHandle ? ` (${senderHandle})` : ""} mencionou você no CineSorte${mediaTitle ? ` em ${mediaTitle}` : ""}.`,
+    eyebrow: "Menção",
+    theme: "reply",
+    actions: [{ label: "Abrir no CineSorte", href: buildMediaUrl(mediaType, mediaId) }],
+    footerNote: "Você recebeu este email porque alguém mencionou seu usuário.",
+  });
+
+  return {
+    to: userEmail,
+    subject: "Você foi mencionado no CineSorte",
+    text,
+    html,
+    logLabel: "mention_notification_email",
   };
 };
 
@@ -229,7 +253,6 @@ const buildAccountDeletionEmail = ({ userEmail, userName }) => {
     title: "Sua conta foi excluída",
     intro: "Confirmamos a exclusão da sua conta no CineSorte.",
     eyebrow: "Conta encerrada",
-    heroLabel: "Registro de segurança",
     theme: "reset",
     actions: [{ label: "Ir para a página inicial", href: homeUrl, variant: "secondary" }],
     sections: [
@@ -242,7 +265,7 @@ const buildAccountDeletionEmail = ({ userEmail, userName }) => {
         ],
       },
     ],
-    footerNote: "Este email foi enviado automaticamente para registrar uma ação importante da conta.",
+    footerNote: "Este email registra uma ação importante da conta.",
   });
 
   return {
@@ -258,5 +281,6 @@ module.exports = {
   buildAccountDeletionEmail,
   buildCommentReplyEmail,
   buildFollowNotificationEmail,
+  buildMentionNotificationEmail,
   buildReviewCommentEmail,
 };

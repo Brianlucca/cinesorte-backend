@@ -35,10 +35,9 @@ const buildSupportTicketReceivedEmail = ({ protocol, userEmail, userName, subjec
     .join("\n");
 
   const html = buildEmailLayout({
-    title: "Chamado recebido com sucesso",
-    intro: `Olá, ${displayName}. Recebemos o seu chamado e ele já entrou na fila da equipe do CineSorte.`,
+    title: "Recebemos seu chamado",
+    intro: `Olá, ${displayName}. Seu chamado foi registrado e será acompanhado pela equipe do CineSorte.`,
     eyebrow: "Suporte CineSorte",
-    heroLabel: "Protocolo em andamento",
     theme: "notice",
     actions: [{ label: "Acompanhar protocolo", href: supportUrl }],
     sections: [
@@ -51,15 +50,9 @@ const buildSupportTicketReceivedEmail = ({ protocol, userEmail, userName, subjec
           `Enviado em: ${createdAtLabel}`,
         ],
       },
-      originalMessage
-        ? {
-            title: "Mensagem enviada",
-            body: originalMessage,
-          }
-        : null,
     ],
-    outro: "Guarde esse protocolo. Você pode acompanhar o status na área de suporte do seu perfil.",
-    footerNote: "Este email foi enviado automaticamente após a abertura do chamado.",
+    outro: "Guarde o protocolo para acompanhar o atendimento.",
+    footerNote: "Este email confirma a abertura do seu chamado.",
   });
 
   return {
@@ -229,10 +222,9 @@ const buildSupportTicketReplyEmail = ({
     .join("\n");
 
   const html = buildEmailLayout({
-    title: "Nova resposta no seu chamado",
+    title: "Seu chamado recebeu uma resposta",
     intro: `Olá, ${displayName}. A equipe do CineSorte enviou uma atualização sobre o seu protocolo.`,
     eyebrow: "Suporte CineSorte",
-    heroLabel: "Atualização do protocolo",
     theme: "notice",
     actions: [{ label: "Abrir suporte no CineSorte", href: supportUrl }],
     sections: [
@@ -249,16 +241,9 @@ const buildSupportTicketReplyEmail = ({
         title: "Resposta da equipe",
         body: replyText,
       },
-      historyItems.length
-        ? {
-            type: "list",
-            title: "Histórico do protocolo",
-            items: historyItems,
-          }
-        : null,
     ],
-    outro: "Você pode responder este email ou acompanhar o protocolo pela área de suporte do seu perfil.",
-    footerNote: "Este email foi enviado automaticamente após uma nova resposta da equipe.",
+    outro: "Você pode responder este email ou acompanhar o protocolo pela área de suporte.",
+    footerNote: "Este email faz parte do atendimento do seu chamado.",
   });
 
   return {
@@ -395,7 +380,6 @@ const buildSupportTicketClosedEmail = ({
     title: "Chamado finalizado",
     intro: `Olá, ${displayName}. Seu chamado foi analisado e finalizado pela equipe do CineSorte.`,
     eyebrow: "Suporte CineSorte",
-    heroLabel: "Encerramento do protocolo",
     theme: "notice",
     actions: [{ label: "Abrir suporte no CineSorte", href: supportUrl }],
     sections: [
@@ -412,16 +396,9 @@ const buildSupportTicketClosedEmail = ({
         title: "Resumo",
         body: summary,
       },
-      historyItems.length
-        ? {
-            type: "list",
-            title: "Histórico do protocolo",
-            items: historyItems,
-          }
-        : null,
     ],
-    outro: "Se precisar, você pode abrir um novo chamado na área de suporte do CineSorte.",
-    footerNote: "Este email foi enviado automaticamente após o encerramento do chamado.",
+    outro: "Se precisar, você pode abrir um novo chamado na área de suporte.",
+    footerNote: "Este email confirma o encerramento do atendimento.",
   });
 
   return {

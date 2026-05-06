@@ -1,67 +1,24 @@
 const { escapeHtml } = require("../utils");
 
 const DEFAULT_THEME = {
-  accent: "#8b5cf6",
-  accentSoft: "rgba(139,92,246,0.18)",
-  panel: "#16161c",
-  panelSoft: "#101016",
-  page: "#09090d",
-  text: "#fafafa",
-  muted: "#c4b5fd",
-  border: "rgba(139,92,246,0.18)",
+  accent: "#6d28d9",
+  accentDark: "#4c1d95",
+  accentSoft: "#f3e8ff",
+  page: "#f5f5f7",
+  panel: "#ffffff",
+  panelSoft: "#fafafa",
+  text: "#18181b",
+  muted: "#52525b",
+  subtle: "#71717a",
+  border: "#e4e4e7",
 };
 
 const THEME_PRESETS = {
-  verification: {
-    accent: "#a855f7",
-    accentSoft: "rgba(168,85,247,0.18)",
-    panel: "#17131f",
-    panelSoft: "#100d16",
-    page: "#09070d",
-    text: "#faf5ff",
-    muted: "#ddd6fe",
-    border: "rgba(168,85,247,0.18)",
-  },
-  reset: {
-    accent: "#8b5cf6",
-    accentSoft: "rgba(139,92,246,0.18)",
-    panel: "#15111d",
-    panelSoft: "#0f0c15",
-    page: "#09070d",
-    text: "#fdfcff",
-    muted: "#ddd6fe",
-    border: "rgba(139,92,246,0.18)",
-  },
-  welcome: {
-    accent: "#8b5cf6",
-    accentSoft: "rgba(139,92,246,0.18)",
-    panel: "#15111d",
-    panelSoft: "#0f0c15",
-    page: "#09070d",
-    text: "#f5f3ff",
-    muted: "#ddd6fe",
-    border: "rgba(139,92,246,0.16)",
-  },
-  follow: {
-    accent: "#8b5cf6",
-    accentSoft: "rgba(139,92,246,0.18)",
-    panel: "#15111d",
-    panelSoft: "#0f0c15",
-    page: "#09070d",
-    text: "#fafafa",
-    muted: "#ddd6fe",
-    border: "rgba(139,92,246,0.16)",
-  },
-  reply: {
-    accent: "#8b5cf6",
-    accentSoft: "rgba(139,92,246,0.18)",
-    panel: "#15111d",
-    panelSoft: "#0f0c15",
-    page: "#09070d",
-    text: "#fafafa",
-    muted: "#ddd6fe",
-    border: "rgba(139,92,246,0.16)",
-  },
+  verification: DEFAULT_THEME,
+  reset: DEFAULT_THEME,
+  welcome: DEFAULT_THEME,
+  follow: DEFAULT_THEME,
+  reply: DEFAULT_THEME,
   notice: DEFAULT_THEME,
 };
 
@@ -76,21 +33,24 @@ const renderActions = (actions = [], theme) => {
   if (!validActions.length) return "";
 
   return `
-    <div style="margin:28px 0 6px;">
-      ${validActions
-        .map((action, index) => {
-          const variant = action.variant === "secondary" ? "secondary" : "primary";
-          const buttonStyles =
-            variant === "secondary"
-              ? `display:inline-block;margin:${index ? "10px 0 0 12px" : "10px 0 0 0"};padding:13px 18px;border-radius:16px;border:1px solid ${theme.border};background:rgba(255,255,255,0.04);color:${theme.text};text-decoration:none;font-weight:700;font-size:14px;`
-              : `display:inline-block;margin:${index ? "10px 0 0 12px" : "10px 0 0 0"};padding:13px 18px;border-radius:16px;background:${theme.accent};color:#ffffff;text-decoration:none;font-weight:800;font-size:14px;box-shadow:0 10px 30px ${theme.accentSoft};`;
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:28px 0 4px;">
+      <tr>
+        ${validActions
+          .map((action, index) => {
+            const isSecondary = action.variant === "secondary";
+            const styles = isSecondary
+              ? `display:inline-block;padding:12px 18px;border-radius:8px;border:1px solid ${theme.border};background:#ffffff;color:${theme.accentDark};text-decoration:none;font-weight:700;font-size:14px;line-height:1.2;`
+              : `display:inline-block;padding:12px 18px;border-radius:8px;background:${theme.accent};color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;line-height:1.2;`;
 
-          return `<a href="${escapeHtml(action.href)}" style="${buttonStyles}" target="_blank" rel="noreferrer">${escapeHtml(
-            action.label
-          )}</a>`;
-        })
-        .join("")}
-    </div>
+            return `
+              <td style="${index ? "padding-left:10px;" : ""}padding-top:4px;">
+                <a href="${escapeHtml(action.href)}" style="${styles}" target="_blank" rel="noreferrer">${escapeHtml(action.label)}</a>
+              </td>
+            `;
+          })
+          .join("")}
+      </tr>
+    </table>
   `;
 };
 
@@ -101,25 +61,29 @@ const renderSection = (section, theme) => {
     const items = (section.items || [])
       .filter(Boolean)
       .map(
-        (item) =>
-          `<li style="margin:0 0 10px 0;color:${theme.text};"><span style="color:${theme.accent};font-weight:800;">•</span> ${escapeHtml(
-            item
-          )}</li>`
+        (item) => `
+          <tr>
+            <td style="width:14px;padding:0 10px 9px 0;color:${theme.accent};font-weight:700;vertical-align:top;">•</td>
+            <td style="padding:0 0 9px 0;color:${theme.text};font-size:15px;line-height:1.55;">${escapeHtml(item)}</td>
+          </tr>
+        `
       )
       .join("");
 
+    if (!items) return "";
+
     return `
-      <div style="margin:18px 0;padding:20px 22px;border-radius:24px;border:1px solid ${theme.border};background:${theme.panelSoft};">
-        ${section.title ? `<p style="margin:0 0 12px;font-size:12px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:${theme.muted};">${escapeHtml(section.title)}</p>` : ""}
-        <ul style="margin:0;padding-left:0;list-style:none;">${items}</ul>
+      <div style="margin:22px 0;padding:18px 20px;border-radius:8px;border:1px solid ${theme.border};background:${theme.panelSoft};">
+        ${section.title ? `<p style="margin:0 0 12px;font-size:13px;font-weight:700;color:${theme.text};">${escapeHtml(section.title)}</p>` : ""}
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width:100%;">${items}</table>
       </div>
     `;
   }
 
   return `
-    <div style="margin:18px 0;padding:20px 22px;border-radius:24px;border:1px solid ${theme.border};background:${theme.panelSoft};">
-      ${section.title ? `<p style="margin:0 0 12px;font-size:12px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:${theme.muted};">${escapeHtml(section.title)}</p>` : ""}
-      <p style="margin:0;color:${theme.text};white-space:pre-wrap;">${escapeHtml(section.body || "")}</p>
+    <div style="margin:22px 0;padding:18px 20px;border-radius:8px;border:1px solid ${theme.border};background:${theme.panelSoft};">
+      ${section.title ? `<p style="margin:0 0 10px;font-size:13px;font-weight:700;color:${theme.text};">${escapeHtml(section.title)}</p>` : ""}
+      <p style="margin:0;color:${theme.text};font-size:15px;line-height:1.65;white-space:pre-wrap;">${escapeHtml(section.body || "")}</p>
     </div>
   `;
 };
@@ -133,58 +97,54 @@ const buildEmailLayout = ({
   eyebrow = "CineSorte",
   theme = "notice",
   heroLabel,
-  heroImage,
   footerNote,
 }) => {
   const palette = resolveTheme(theme);
   const safeSections = sections.filter(Boolean).map((section) => renderSection(section, palette)).join("");
-  const safeHeroImage = heroImage
-    ? `<img src="${escapeHtml(heroImage)}" alt="" style="width:100%;max-width:240px;height:auto;border-radius:20px;border:1px solid ${palette.border};display:block;box-shadow:0 18px 50px rgba(0,0,0,0.35);" />`
-    : "";
 
   return `
-    <div style="margin:0;padding:0;background:${palette.page};font-family:Arial,Helvetica,sans-serif;">
-      <div style="max-width:760px;margin:0 auto;padding:28px 18px 40px;">
-        <div style="padding:28px;border-radius:32px;background:linear-gradient(145deg, ${palette.panel} 0%, ${palette.panelSoft} 100%);border:1px solid ${palette.border};overflow:hidden;">
-          <div style="position:relative;padding:0 0 24px 0;border-bottom:1px solid ${palette.border};">
-            <div style="display:inline-block;padding:8px 12px;border-radius:999px;background:${palette.accentSoft};color:${palette.accent};font-size:11px;font-weight:900;letter-spacing:.18em;text-transform:uppercase;">
-              ${escapeHtml(eyebrow)}
-            </div>
-            ${
-              heroLabel
-                ? `<p style="margin:18px 0 0;color:${palette.muted};font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;">${escapeHtml(
-                    heroLabel
-                  )}</p>`
-                : ""
-            }
-            <div style="margin-top:18px;display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;">
-              <div style="flex:1 1 320px;min-width:280px;">
-                <h1 style="margin:0 0 14px;color:${palette.text};font-size:34px;line-height:1.08;">${escapeHtml(title)}</h1>
-                <p style="margin:0;color:${palette.muted};font-size:16px;line-height:1.7;">${escapeHtml(intro)}</p>
-                ${renderActions(actions, palette)}
-              </div>
-              ${
-                safeHeroImage
-                  ? `<div style="flex:0 0 240px;max-width:240px;margin-left:auto;">${safeHeroImage}</div>`
-                  : ""
-              }
-            </div>
-          </div>
+    <div style="margin:0;padding:0;background:${palette.page};font-family:Arial,Helvetica,sans-serif;color:${palette.text};">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:${palette.page};">
+        <tr>
+          <td style="padding:32px 14px;">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;margin:0 auto;background:${palette.panel};border:1px solid ${palette.border};border-radius:10px;overflow:hidden;">
+              <tr>
+                <td style="padding:22px 28px;border-bottom:1px solid ${palette.border};background:#ffffff;">
+                  <p style="margin:0;color:${palette.accent};font-size:14px;line-height:1;font-weight:800;">CineSorte</p>
+                </td>
+              </tr>
 
-          <div style="padding-top:26px;">
-            ${safeSections}
-            ${outro ? `<p style="margin:28px 0 0;color:${palette.muted};font-size:15px;line-height:1.7;">${escapeHtml(outro)}</p>` : ""}
-            <div style="margin-top:30px;padding-top:20px;border-top:1px solid ${palette.border};">
-              <p style="margin:0;color:${palette.text};font-weight:800;">Equipe CineSorte</p>
-              ${
-                footerNote
-                  ? `<p style="margin:10px 0 0;color:${palette.muted};font-size:13px;line-height:1.6;">${escapeHtml(footerNote)}</p>`
-                  : ""
-              }
-            </div>
-          </div>
-        </div>
-      </div>
+              <tr>
+                <td style="padding:30px 28px 8px;">
+                  <p style="margin:0 0 12px;color:${palette.subtle};font-size:12px;line-height:1.4;font-weight:700;text-transform:uppercase;letter-spacing:.08em;">${escapeHtml(eyebrow)}</p>
+                  ${heroLabel ? `<p style="margin:0 0 8px;color:${palette.accentDark};font-size:13px;line-height:1.5;font-weight:700;">${escapeHtml(heroLabel)}</p>` : ""}
+                  <h1 style="margin:0;color:${palette.text};font-size:26px;line-height:1.25;font-weight:800;">${escapeHtml(title)}</h1>
+                  <p style="margin:16px 0 0;color:${palette.muted};font-size:16px;line-height:1.65;">${escapeHtml(intro)}</p>
+                  ${renderActions(actions, palette)}
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding:0 28px 30px;">
+                  ${safeSections}
+                  ${outro ? `<p style="margin:24px 0 0;color:${palette.muted};font-size:15px;line-height:1.65;">${escapeHtml(outro)}</p>` : ""}
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding:20px 28px;background:${palette.panelSoft};border-top:1px solid ${palette.border};">
+                  <p style="margin:0;color:${palette.text};font-size:14px;font-weight:700;">Equipe CineSorte</p>
+                  ${
+                    footerNote
+                      ? `<p style="margin:8px 0 0;color:${palette.subtle};font-size:12px;line-height:1.6;">${escapeHtml(footerNote)}</p>`
+                      : ""
+                  }
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     </div>
   `;
 };

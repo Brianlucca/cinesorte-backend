@@ -9,6 +9,7 @@ const {
 } = require("../../utils/gamification");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
+const logger = require("../../utils/logger");
 const {
   safeUsername,
   getSharedListPreview,
@@ -19,11 +20,20 @@ const { getLikedReviewIds, setLikeState } = require("../reviewLikeStateService")
 const { deleteByPrefix } = require("../cacheService");
 const {
   sendCommentReplyEmail,
+  sendMentionNotificationEmail,
   sendReviewCommentEmail,
 } = require("../email");
 
 const MAX_MENTIONS_PER_TEXT = 5;
 const REVIEW_PAGE_SIZE = 20;
+
+const runInBackground = (label, task) => {
+  Promise.resolve()
+    .then(task)
+    .catch((error) => {
+      logger.error("%s failed: %s", label, error?.message || error);
+    });
+};
 
 const extractMentions = (text) => {
   if (!text) return [];
@@ -38,9 +48,21 @@ const getNewMentions = (oldText, newText) => {
   return newM.filter((m) => !oldSet.has(m.toLowerCase()));
 };
 
-const notifyMentions = async (mentionsArray, senderId, senderName, senderUsername, senderPhoto, mediaId, mediaType, reviewId) => {
+const notifyMentions = async (
+  mentionsArray,
+  senderId,
+  senderName,
+  senderUsername,
+  senderPhoto,
+  mediaId,
+  mediaType,
+  reviewId,
+  mediaTitle,
+  options = {}
+) => {
   if (!mentionsArray || mentionsArray.length === 0) return;
   const uniqueUsernames = [...new Set(mentionsArray.map((m) => m.replace('@', '')))].slice(0, MAX_MENTIONS_PER_TEXT);
+  const suppressEmailUserIds = new Set(options.suppressEmailUserIds || []);
 
   for (const username of uniqueUsernames) {
     if (username === senderUsername) continue;
@@ -48,6 +70,7 @@ const notifyMentions = async (mentionsArray, senderId, senderName, senderUsernam
       const userQuery = await db.collection("users").where("username", "==", username).limit(1).get();
       if (!userQuery.empty) {
         const targetUserId = userQuery.docs[0].id;
+        const targetUserData = userQuery.docs[0].data() || {};
         await db.collection("notifications").add({
           recipientId: targetUserId,
           senderId: senderId,
@@ -65,6 +88,20 @@ const notifyMentions = async (mentionsArray, senderId, senderName, senderUsernam
           icon: "AtSign",
         });
         await deleteByPrefix("notifications:");
+
+        if (targetUserData.email && !suppressEmailUserIds.has(targetUserId)) {
+          runInBackground("mention notification email", () =>
+            sendMentionNotificationEmail({
+              userEmail: targetUserData.email,
+              userName: targetUserData.name || targetUserData.username || "cinéfilo",
+              senderName: senderName || senderUsername || "Alguém",
+              senderUsername: senderUsername || null,
+              mediaTitle: mediaTitle || null,
+              mediaType,
+              mediaId,
+            })
+          );
+        }
       }
     } catch (e) {}
   }
@@ -193,7 +230,8 @@ exports.addReview = catchAsync(async (req, res, next) => {
       userDataCache.photoURL,
       mediaId,
       mediaType,
-      newReviewId
+      newReviewId,
+      mediaTitle
     );
   }
 
@@ -247,7 +285,8 @@ exports.updateReview = catchAsync(async (req, res, next) => {
       userData.photoURL,
       oldData.mediaId,
       oldData.mediaType,
-      reviewId
+      reviewId,
+      oldData.mediaTitle
     );
   }
 
@@ -423,20 +462,6 @@ exports.addComment = catchAsync(async (req, res, next) => {
     await deleteByPrefix("notifications:");
   }
 
-  const mentions = extractMentions(text);
-    if (mentions.length > 0) {
-      await notifyMentions(
-        mentions,
-        uid,
-      userData.name,
-      userData.username,
-      userData.photoURL,
-      reviewData.mediaId,
-      reviewData.mediaType,
-        reviewId
-      );
-    }
-
     const engagementRecipients = [];
 
     if (reviewData.userId && reviewData.userId !== uid) {
@@ -451,20 +476,38 @@ exports.addComment = catchAsync(async (req, res, next) => {
       engagementRecipients.push({ type: "comment_owner", userId: parentCommentData.userId });
     }
 
-    if (engagementRecipients.length > 0) {
-      const recipientDocs = await Promise.all(
-        engagementRecipients.map((recipient) => db.collection("users").doc(recipient.userId).get())
+    const mentions = extractMentions(text);
+    if (mentions.length > 0) {
+      await notifyMentions(
+        mentions,
+        uid,
+        userData.name,
+        userData.username,
+        userData.photoURL,
+        reviewData.mediaId,
+        reviewData.mediaType,
+        reviewId,
+        reviewData.mediaTitle,
+        {
+          suppressEmailUserIds: engagementRecipients.map((recipient) => recipient.userId),
+        }
       );
+    }
 
-      await Promise.all(
-        recipientDocs.map(async (doc, index) => {
+    if (engagementRecipients.length > 0) {
+      runInBackground("comment engagement emails", async () => {
+        const recipientDocs = await Promise.all(
+          engagementRecipients.map((recipient) => db.collection("users").doc(recipient.userId).get())
+        );
+
+        await Promise.all(
+          recipientDocs.map(async (doc, index) => {
           if (!doc.exists) return;
 
           const recipient = engagementRecipients[index];
           const recipientData = doc.data() || {};
           if (!recipientData.email) return;
 
-          try {
             if (recipient.type === "review_owner") {
               await sendReviewCommentEmail({
                 userEmail: recipientData.email,
@@ -489,9 +532,9 @@ exports.addComment = catchAsync(async (req, res, next) => {
               mediaId: reviewData.mediaId || null,
               originalCommentText: parentCommentData?.text || null,
             });
-          } catch {}
-        })
-      );
+          })
+        );
+      });
     }
 
     res.status(201).json({
@@ -550,7 +593,8 @@ exports.updateComment = catchAsync(async (req, res, next) => {
       userData.photoURL,
       reviewData.mediaId,
       reviewData.mediaType,
-      oldData.reviewId
+      oldData.reviewId,
+      reviewData.mediaTitle
     );
   }
 
