@@ -19,6 +19,7 @@ const {
   buildAccountDeletionEmail: createAccountDeletionEmail,
   buildCommentReplyEmail: createCommentReplyEmail,
   buildFollowNotificationEmail: createFollowNotificationEmail,
+  buildMentionNotificationEmail: createMentionNotificationEmail,
   buildReviewCommentEmail: createReviewCommentEmail,
 } = require("./templates/engagement");
 
@@ -35,6 +36,7 @@ const sendActionConfirmationEmail = (payload) => sendMail(createAccountNoticeEma
 const sendVerificationEmail = (payload) => sendMail(createVerificationEmail(payload));
 const sendPasswordResetEmail = (payload) => sendMail(createPasswordResetEmail(payload));
 const sendFollowNotificationEmail = (payload) => sendMail(createFollowNotificationEmail(payload));
+const sendMentionNotificationEmail = (payload) => sendMail(createMentionNotificationEmail(payload));
 const sendReviewCommentEmail = (payload) => sendMail(createReviewCommentEmail(payload));
 const sendCommentReplyEmail = (payload) => sendMail(createCommentReplyEmail(payload));
 const sendAccountDeletionEmail = (payload) => sendMail(createAccountDeletionEmail(payload));
@@ -55,6 +57,7 @@ module.exports = {
   sendVerificationEmail,
   sendPasswordResetEmail,
   sendFollowNotificationEmail,
+  sendMentionNotificationEmail,
   sendReviewCommentEmail,
   sendCommentReplyEmail,
   sendAccountDeletionEmail,
