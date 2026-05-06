@@ -38,6 +38,14 @@ async function getLikedMediaIdsForUser(userId) {
   return likedMediaIds;
 }
 
+const runInBackground = (label, task) => {
+  Promise.resolve()
+    .then(task)
+    .catch((error) => {
+      logger.error("%s failed: %s", label, error?.message || error);
+    });
+};
+
 exports.followUser = catchAsync(async (req, res, next) => {
   const { uid, username, photoURL } = req.user;
   const targetHandle = req.body.targetUsername || req.body.targetUserId;
@@ -103,16 +111,14 @@ exports.followUser = catchAsync(async (req, res, next) => {
   await deleteByPrefix("notifications:");
 
   if (targetProfile?.email) {
-    try {
-      await sendFollowNotificationEmail({
+    runInBackground("follow notification email", () =>
+      sendFollowNotificationEmail({
         userEmail: targetProfile.email,
         userName: targetProfile.name || targetProfile.username || "cinéfilo",
         followerName: username || "Alguém",
         followerUsername: username || null,
-      });
-    } catch (emailError) {
-      logger.error("follow notification email failed: %s", emailError.message || emailError);
-    }
+      })
+    );
   }
 
   res.status(200).json({ message: "Seguindo." });
