@@ -76,6 +76,16 @@ const registerLimiter = rateLimit({
   },
 });
 
+const verificationEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 3,
+  handler: (req, res) => {
+    if (env.NODE_ENV === "production")
+      sendAlert(`VERIFICATION EMAIL RATE LIMIT: IP ${req.ip} bloqueado.`);
+    res.status(429).json({ message: "Muitas solicitações. Tente novamente mais tarde." });
+  },
+});
+
 const BLOCKED_UA = /PostmanRuntime|Insomnia|curl/i;
 
 const shield = (req, res, next) => {
@@ -163,6 +173,7 @@ module.exports = {
   tmdbApiLimiter,
   authLimiter,
   registerLimiter,
+  verificationEmailLimiter,
   sanitizeInput,
   shield,
   protectStateChangingRequests,

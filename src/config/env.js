@@ -30,6 +30,9 @@ const envSchema = z.object({
   VERIFICATION_EMAIL_RESCUE_MIN_AGE_MINUTES: z.string().optional(),
   VERIFICATION_EMAIL_RESCUE_COOLDOWN_HOURS: z.string().optional(),
   VERIFICATION_EMAIL_RESCUE_MAX_SENDS: z.string().optional(),
+  ACCOUNT_DELETION_CLEANUP_ENABLED: z.string().optional(),
+  ACCOUNT_DELETION_CLEANUP_INTERVAL_MS: z.string().optional(),
+  ACCOUNT_DELETION_CLEANUP_LIMIT: z.string().optional(),
   MEMORY_CACHE_MAX_ENTRIES: z.string().optional(),
 });
 

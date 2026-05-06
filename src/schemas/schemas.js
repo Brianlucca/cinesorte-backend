@@ -21,6 +21,14 @@ const loginSchema = z.object({
   turnstileToken: z.string().min(1, 'Verificação de segurança obrigatória.'),
 });
 
+const resendVerificationEmailSchema = z.object({
+  email: z.string().email(),
+});
+
+const accountDeletionTokenSchema = z.object({
+  token: z.string().min(40).max(256),
+});
+
 const profileSchema = z.object({
   name: z.string().min(2).max(50).regex(nameRegex).optional(),
   username: z.string().min(3).max(30).regex(/^[a-z0-9_]+$/).optional(),
@@ -95,6 +103,8 @@ const supportTicketSchema = z.object({
 module.exports = {
   registerSchema,
   loginSchema,
+  resendVerificationEmailSchema,
+  accountDeletionTokenSchema,
   profileSchema,
   reviewSchema,
   reviewUpdateSchema,

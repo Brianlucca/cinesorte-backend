@@ -6,6 +6,7 @@ const DEFAULT_LIMIT = 100;
 const DEFAULT_MIN_AGE_MINUTES = 5;
 const DEFAULT_COOLDOWN_HOURS = 6;
 const DEFAULT_MAX_RESCUE_SENDS = 1;
+const USER_REQUEST_COOLDOWN_MINUTES = 2;
 
 const toDate = (value) => {
   if (!value) return null;
@@ -70,6 +71,45 @@ const sendVerificationForUser = async ({ userRecord, userData, userRef, dryRun }
   const result = await sendVerificationEmail(payload);
   await markVerificationEmailAttempt({ userRef, result, dryRun });
   return result;
+};
+
+const resendVerificationEmailForAddress = async ({
+  email,
+  cooldownMinutes = USER_REQUEST_COOLDOWN_MINUTES,
+} = {}) => {
+  if (!email) return { status: "skipped", reason: "missing_email" };
+
+  let userRecord;
+  try {
+    userRecord = await auth.getUserByEmail(email);
+  } catch (error) {
+    if (error?.code === "auth/user-not-found") {
+      return { status: "skipped", reason: "user_not_found" };
+    }
+    throw error;
+  }
+
+  if (!userRecord.email || userRecord.emailVerified || !isEmailPasswordUser(userRecord)) {
+    return { status: "skipped", reason: "not_eligible" };
+  }
+
+  const userRef = db.collection("users").doc(userRecord.uid);
+  const userDoc = await userRef.get();
+  const userData = userDoc.data() || {};
+  const cooldownMs = Math.max(0, Number(cooldownMinutes) || 0) * 60 * 1000;
+
+  if (shouldSkipByCooldown(userData, cooldownMs)) {
+    return { status: "skipped", reason: "cooldown" };
+  }
+
+  const result = await sendVerificationForUser({ userRecord, userData, userRef, dryRun: false });
+  const status = result.sent ? "sent" : result.queued ? "queued" : result.skipped ? "skipped" : "failed";
+
+  return {
+    status,
+    reason: result.reason || result.error || null,
+    jobId: result.jobId || null,
+  };
 };
 
 const resendPendingVerificationEmails = async ({
@@ -165,5 +205,6 @@ const resendPendingVerificationEmails = async ({
 };
 
 module.exports = {
+  resendVerificationEmailForAddress,
   resendPendingVerificationEmails,
 };

@@ -1,4 +1,5 @@
 const axios = require("axios");
+const crypto = require("crypto");
 const admin = require("firebase-admin");
 
 const { auth, db } = require("../config/firebase");
@@ -15,14 +16,99 @@ const catchAsync = require("../utils/catchAsync");
 const logger = require("../utils/logger");
 const { containsProfanity } = require("../utils/profanity");
 const {
+  sendAccountDeletionRequestEmail,
   sendAccountDeletionEmail,
+  sendLoginAlertEmail,
   sendPasswordResetEmail,
   sendVerificationEmail,
   sendWelcomeEmail,
 } = require("../services/email");
 
+const normalizeIp = (rawIp = "") => {
+  const ip = String(rawIp || "").trim();
+  if (!ip) return "";
+  if (ip.startsWith("::ffff:")) return ip.slice(7);
+  if (ip === "::1") return "127.0.0.1";
+  return ip;
+};
+
+const isPrivateIp = (ip = "") => /^(127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|fc00:|fe80:|::1)/i.test(ip);
+
+const formatUserAgent = (userAgent = "") => {
+  const ua = String(userAgent || "").trim();
+  if (!ua) return "não identificado";
+
+  const browser = /Edg\//.test(ua) || /Edge\//.test(ua)
+    ? "Microsoft Edge"
+    : /OPR\//.test(ua) || /Opera/.test(ua)
+    ? "Opera"
+    : /CriOS/.test(ua) || (/Chrome\//.test(ua) && /Safari\//.test(ua))
+    ? "Chrome"
+    : /Firefox\//.test(ua)
+    ? "Firefox"
+    : /Safari\//.test(ua)
+    ? "Safari"
+    : /MSIE|Trident\//.test(ua)
+    ? "Internet Explorer"
+    : /SamsungBrowser\//.test(ua)
+    ? "Samsung Internet"
+    : "navegador desconhecido";
+
+  const os = /Windows NT 10/.test(ua)
+    ? "Windows 10"
+    : /Windows NT 6\.3/.test(ua)
+    ? "Windows 8.1"
+    : /Windows NT 6\.2/.test(ua)
+    ? "Windows 8"
+    : /Windows NT 6\.1/.test(ua)
+    ? "Windows 7"
+    : /Mac OS X/.test(ua)
+    ? "macOS"
+    : /Android/.test(ua)
+    ? "Android"
+    : /iPhone|iPad|iPod/.test(ua)
+    ? "iOS"
+    : /Linux/.test(ua)
+    ? "Linux"
+    : "sistema desconhecido";
+
+  const device = /Mobile|iPhone|iPad|iPod|Android/.test(ua) ? "móvel" : "desktop";
+
+  return `${browser} em ${os} (${device})`;
+};
+
+const lookupIpLocation = async (ip) => {
+  const normalizedIp = normalizeIp(ip);
+  if (!normalizedIp || isPrivateIp(normalizedIp)) return null;
+
+  try {
+    const response = await axios.get(`https://ipapi.co/${encodeURIComponent(normalizedIp)}/json/`, {
+      timeout: 2500,
+    });
+
+    const data = response.data || {};
+    if (data.error || !data.country_name || typeof data.latitude !== "number" || typeof data.longitude !== "number") {
+      return null;
+    }
+
+    return {
+      city: data.city || null,
+      region: data.region || null,
+      countryName: data.country_name || null,
+      latitude: data.latitude,
+      longitude: data.longitude,
+    };
+  } catch (error) {
+    return null;
+  }
+};
+const { resendVerificationEmailForAddress } = require("../services/emailVerificationResendService");
+
 const isProduction = env.NODE_ENV === "production";
-const CURRENT_TERMS_VERSION = "3.0";
+const CURRENT_TERMS_VERSION = "4.0";
+const ACCOUNT_DELETION_REQUESTS = "account_deletion_requests";
+const ACCOUNT_DELETION_TOKEN_BYTES = 32;
+const ACCOUNT_DELETION_TOKEN_TTL_MINUTES = 30;
 
 const setNoStore = (res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
@@ -39,6 +125,25 @@ const logAuthEvent = (req, event, details = {}) => {
     method: req.method,
     ...details,
   });
+};
+
+const runInBackground = (label, task) => {
+  Promise.resolve()
+    .then(task)
+    .catch((error) => {
+      logger.error("%s failed: %s", label, error?.message || error);
+    });
+};
+
+const hashToken = (token) => crypto.createHash("sha256").update(String(token || "")).digest("hex");
+
+const createSecureToken = () => crypto.randomBytes(ACCOUNT_DELETION_TOKEN_BYTES).toString("hex");
+
+const toDate = (value) => {
+  if (!value) return null;
+  if (typeof value.toDate === "function") return value.toDate();
+  if (value instanceof Date) return value;
+  return new Date(value);
 };
 
 async function verifyTurnstile(token, ip) {
@@ -150,6 +255,71 @@ async function sendWelcomeAfterVerification({ userRef, userData = {}, userEmail,
     },
     { merge: true }
   );
+}
+
+async function deleteAccountData(uid) {
+  const userRef = db.collection("users").doc(uid);
+
+  await deleteCollectionData("reviews", uid);
+  await deleteCollectionData("comments", uid);
+  await deleteCollectionData("interactions", uid);
+  await deleteCollectionData("shared_lists", uid);
+
+  await deleteSubcollections(userRef);
+  await deleteAccountDeletionRequests(uid);
+  await userRef.delete();
+  await admin.auth().deleteUser(uid);
+}
+
+async function deleteAccountDeletionRequests(uid) {
+  const snapshot = await db.collection(ACCOUNT_DELETION_REQUESTS).where("uid", "==", uid).limit(50).get();
+  if (snapshot.empty) return;
+
+  const batch = db.batch();
+  snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+  await batch.commit();
+}
+
+async function deleteExpiredAccountDeletionRequests(uid) {
+  const snapshot = await db
+    .collection(ACCOUNT_DELETION_REQUESTS)
+    .where("uid", "==", uid)
+    .where("status", "==", "pending")
+    .limit(50)
+    .get();
+
+  if (snapshot.empty) return;
+
+  const now = admin.firestore.Timestamp.now();
+  const expiredDocs = snapshot.docs.filter((doc) => {
+    const request = doc.data() || {};
+    const expiresAt = request.expiresAt;
+    return expiresAt && expiresAt.toMillis && expiresAt.toMillis() <= now.toMillis();
+  });
+
+  if (!expiredDocs.length) return;
+
+  const batch = db.batch();
+  expiredDocs.forEach((doc) => batch.delete(doc.ref));
+  await batch.commit();
+}
+
+async function sendLoginSecurityAlert({ req, email, userData }) {
+  if (!email) return;
+
+  const normalizedIp = normalizeIp(req.ip || "");
+  const accessLocation = await lookupIpLocation(normalizedIp);
+  const resetLink = await auth.generatePasswordResetLink(email);
+
+  await sendLoginAlertEmail({
+    userEmail: email,
+    userName: userData.name || userData.username || "cinéfilo",
+    resetLink,
+    accessDate: new Date().toLocaleString("pt-BR", { timeZone: "America/Bahia" }),
+    ip: normalizedIp || "não identificado",
+    userAgent: formatUserAgent(req.headers["user-agent"]),
+    location: accessLocation,
+  });
 }
 
 exports.register = catchAsync(async (req, res, next) => {
@@ -311,6 +481,9 @@ exports.login = catchAsync(async (req, res, next) => {
     }
 
     logAuthEvent(req, "login_success", { uid: response.data.localId, email, username: userData.username || null });
+    runInBackground("login security alert email", () =>
+      sendLoginSecurityAlert({ req, email, userData })
+    );
     setNoStore(res);
     res.status(200).json({
       uid: response.data.localId,
@@ -326,6 +499,31 @@ exports.login = catchAsync(async (req, res, next) => {
     });
     return next(new AppError("Credenciais inválidas.", 401));
   }
+});
+
+exports.resendVerificationEmail = catchAsync(async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const result = await resendVerificationEmailForAddress({ email });
+    logAuthEvent(req, "verification_email_resend_requested", {
+      email,
+      status: result.status,
+      reason: result.reason || null,
+    });
+  } catch (error) {
+    logger.error("verification email resend request failed: %s", error.message || error);
+    logAuthEvent(req, "verification_email_resend_requested", {
+      email,
+      status: "failed",
+      reason: error.message || "unknown_error",
+    });
+  }
+
+  setNoStore(res);
+  res.status(200).json({
+    message: "Se houver uma conta pendente para este email, enviaremos uma nova confirmação.",
+  });
 });
 
 exports.googleAuth = catchAsync(async (req, res, next) => {
@@ -417,6 +615,9 @@ exports.googleAuth = catchAsync(async (req, res, next) => {
   }
 
   logAuthEvent(req, "google_auth_success", { uid, email, username: userData.username });
+  runInBackground("google login security alert email", () =>
+    sendLoginSecurityAlert({ req, email, userData })
+  );
   setNoStore(res);
   res.status(200).json({
     uid,
@@ -619,33 +820,97 @@ exports.resetPassword = catchAsync(async (req, res, next) => {
   res.status(200).json({ message: "Solicitação recebida." });
 });
 
-exports.deleteAccount = catchAsync(async (req, res) => {
+exports.requestAccountDeletion = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
   const userRef = db.collection("users").doc(uid);
   const userDoc = await userRef.get();
-  const userData = userDoc.data() || {};
+  if (!userDoc.exists) return next(new AppError("Usuário não encontrado.", 404));
 
-  if (userData.email) {
-    try {
-      await sendAccountDeletionEmail({
-        userEmail: userData.email,
-        userName: userData.name || userData.username || "cinéfilo",
-      });
-    } catch (emailError) {
-      logger.error("account deletion email failed: %s", emailError.message || emailError);
-    }
+  const userData = userDoc.data() || {};
+  if (!userData.email) return next(new AppError("Não foi possível identificar o email da sua conta.", 400));
+
+  const token = createSecureToken();
+  const tokenHash = hashToken(token);
+  const now = admin.firestore.Timestamp.now();
+  const expiresAt = admin.firestore.Timestamp.fromDate(
+    new Date(Date.now() + ACCOUNT_DELETION_TOKEN_TTL_MINUTES * 60 * 1000)
+  );
+  const confirmLink = `${env.FRONTEND_URL.replace(/\/$/, "")}/confirm-delete-account?token=${token}`;
+
+  await deleteExpiredAccountDeletionRequests(uid);
+  await deleteAccountDeletionRequests(uid);
+
+  await db.collection(ACCOUNT_DELETION_REQUESTS).doc(tokenHash).set({
+    uid,
+    status: "pending",
+    createdAt: now,
+    expiresAt,
+  });
+
+  await sendAccountDeletionRequestEmail({
+    userEmail: userData.email,
+    userName: userData.name || userData.username || "cinéfilo",
+    confirmLink,
+    expiresInMinutes: ACCOUNT_DELETION_TOKEN_TTL_MINUTES,
+  });
+
+  logAuthEvent(req, "account_deletion_requested", { uid });
+  setNoStore(res);
+  res.status(200).json({
+    message: "Enviamos um email para confirmar a exclusão da sua conta.",
+  });
+});
+
+exports.deleteAccount = exports.requestAccountDeletion;
+
+exports.confirmAccountDeletion = catchAsync(async (req, res, next) => {
+  const { token } = req.body;
+  const tokenHash = hashToken(token);
+  const requestRef = db.collection(ACCOUNT_DELETION_REQUESTS).doc(tokenHash);
+  const requestDoc = await requestRef.get();
+
+  if (!requestDoc.exists) return next(new AppError("Link inválido ou expirado.", 400));
+
+  const requestData = requestDoc.data() || {};
+  const expiresAt = toDate(requestData.expiresAt);
+
+  if (requestData.status !== "pending" || !expiresAt || expiresAt.getTime() < Date.now()) {
+    await requestRef.delete().catch(() => {});
+    return next(new AppError("Link inválido ou expirado.", 400));
   }
 
-  await deleteCollectionData("reviews", uid);
-  await deleteCollectionData("comments", uid);
-  await deleteCollectionData("interactions", uid);
-  await deleteCollectionData("shared_lists", uid);
+  const uid = requestData.uid;
+  const userRef = db.collection("users").doc(uid);
+  const userDoc = await userRef.get();
 
-  await deleteSubcollections(userRef);
-  await userRef.delete();
-  await admin.auth().deleteUser(uid);
+  await requestRef.set(
+    {
+      status: "processing",
+      confirmedAt: admin.firestore.Timestamp.now(),
+    },
+    { merge: true }
+  );
 
+  if (userDoc.exists) {
+    const userData = userDoc.data() || {};
+    const userEmail = userData.email;
+    const userName = userData.name || userData.username || "cinéfilo";
+
+    await deleteAccountData(uid);
+
+    if (userEmail) {
+      try {
+        await sendAccountDeletionEmail({ userEmail, userName });
+      } catch (emailError) {
+        logger.error("account deletion email failed: %s", emailError.message || emailError);
+      }
+    }
+  } else {
+    await deleteAccountDeletionRequests(uid);
+  }
+
+  logAuthEvent(req, "account_deletion_confirmed", { uid });
   clearSessionCookies(res);
   setNoStore(res);
-  res.status(200).json({ message: "Excluído com sucesso." });
+  res.status(200).json({ message: "Conta excluída com sucesso." });
 });

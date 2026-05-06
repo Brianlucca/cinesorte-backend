@@ -80,6 +80,18 @@ const renderSection = (section, theme) => {
     `;
   }
 
+  if (section.type === "image") {
+    if (!section.src) return "";
+
+    return `
+      <div style="margin:22px 0;padding:18px 20px;border-radius:8px;border:1px solid ${theme.border};background:${theme.panelSoft};">
+        ${section.title ? `<p style="margin:0 0 12px;font-size:13px;font-weight:700;color:${theme.text};">${escapeHtml(section.title)}</p>` : ""}
+        ${section.body ? `<p style="margin:0 0 16px;color:${theme.text};font-size:15px;line-height:1.65;">${escapeHtml(section.body)}</p>` : ""}
+        <img src="${escapeHtml(section.src)}" alt="${escapeHtml(section.alt || "")}" style="display:block;width:100%;height:auto;border-radius:8px;" />
+      </div>
+    `;
+  }
+
   return `
     <div style="margin:22px 0;padding:18px 20px;border-radius:8px;border:1px solid ${theme.border};background:${theme.panelSoft};">
       ${section.title ? `<p style="margin:0 0 10px;font-size:13px;font-weight:700;color:${theme.text};">${escapeHtml(section.title)}</p>` : ""}

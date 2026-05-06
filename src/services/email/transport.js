@@ -153,6 +153,16 @@ const sendMail = async (payload) => {
   }
 
   const errorMessage = lastError?.message || String(lastError || "unknown_error");
+  if (payload.disableQueue) {
+    logger.error("%s failed after retries and was not queued: %s", payload.logLabel || "email_delivery", errorMessage);
+    return {
+      skipped: false,
+      sent: false,
+      queued: false,
+      error: errorMessage,
+    };
+  }
+
   const queueResult = await queueEmailJob(payload, errorMessage);
   logger.error("%s failed after retries and was queued: %s", payload.logLabel || "email_delivery", errorMessage);
   return {

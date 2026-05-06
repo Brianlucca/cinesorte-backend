@@ -11,6 +11,8 @@ const {
 } = require("./templates/support");
 const {
   buildAccountNoticeEmail: createAccountNoticeEmail,
+  buildAccountDeletionRequestEmail: createAccountDeletionRequestEmail,
+  buildLoginAlertEmail: createLoginAlertEmail,
   buildPasswordResetEmail: createPasswordResetEmail,
   buildVerificationEmail: createVerificationEmail,
   buildWelcomeEmail: createWelcomeEmail,
@@ -33,6 +35,8 @@ const sendSupportTicketClosedEmail = (payload) => sendMail(createSupportTicketCl
 const sendWelcomeEmail = (payload) => sendMail(createWelcomeEmail(payload));
 const sendAccountNoticeEmail = (payload) => sendMail(createAccountNoticeEmail(payload));
 const sendActionConfirmationEmail = (payload) => sendMail(createAccountNoticeEmail(payload));
+const sendAccountDeletionRequestEmail = (payload) => sendMail(createAccountDeletionRequestEmail(payload));
+const sendLoginAlertEmail = (payload) => sendMail(createLoginAlertEmail(payload));
 const sendVerificationEmail = (payload) => sendMail(createVerificationEmail(payload));
 const sendPasswordResetEmail = (payload) => sendMail(createPasswordResetEmail(payload));
 const sendFollowNotificationEmail = (payload) => sendMail(createFollowNotificationEmail(payload));
@@ -54,6 +58,8 @@ module.exports = {
   sendWelcomeEmail,
   sendAccountNoticeEmail,
   sendActionConfirmationEmail,
+  sendAccountDeletionRequestEmail,
+  sendLoginAlertEmail,
   sendVerificationEmail,
   sendPasswordResetEmail,
   sendFollowNotificationEmail,
