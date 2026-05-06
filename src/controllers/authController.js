@@ -174,7 +174,9 @@ exports.register = catchAsync(async (req, res, next) => {
     emailVerified: false,
   });
 
-  await db.collection("users").doc(userRecord.uid).set({
+  const userRef = db.collection("users").doc(userRecord.uid);
+
+  await userRef.set({
     name,
     username: nickname,
     email,
@@ -203,20 +205,55 @@ exports.register = catchAsync(async (req, res, next) => {
 
   try {
     const verificationLink = await auth.generateEmailVerificationLink(email);
-    await sendVerificationEmail({
+    const verificationResult = await sendVerificationEmail({
       userEmail: email,
       userName: name,
       username: nickname,
       verificationLink,
     });
+
+    await userRef.set(
+      {
+        verificationEmailLastSentAt: admin.firestore.Timestamp.now(),
+        verificationEmailLastStatus: verificationResult.sent
+          ? "sent"
+          : verificationResult.queued
+            ? "queued"
+            : verificationResult.skipped
+              ? "skipped"
+              : "failed",
+        verificationEmailLastError: verificationResult.error || verificationResult.reason || null,
+        verificationEmailResendCount: 0,
+        updatedAt: new Date(),
+      },
+      { merge: true }
+    );
+
+    if (!verificationResult.sent) {
+      logger.warn(
+        "verification email not sent immediately: %s",
+        verificationResult.error || verificationResult.reason || "queued_or_unknown"
+      );
+    }
   } catch (emailError) {
     const { sendAlert } = require("../services/telegramService");
     const errInfo = emailError.response ? emailError.response.data : emailError;
     logger.error("sending verification email failed: %o", errInfo);
 
+    await userRef.set(
+      {
+        verificationEmailLastSentAt: admin.firestore.Timestamp.now(),
+        verificationEmailLastStatus: "failed",
+        verificationEmailLastError: errInfo.message || JSON.stringify(errInfo),
+        verificationEmailResendCount: 0,
+        updatedAt: new Date(),
+      },
+      { merge: true }
+    );
+
     if (isProduction) {
       sendAlert(
-        `Falha ao enviar email de confirmação de conta para ${email}. Erro: ${
+        `Falha ao enviar email de confirmação de conta. Erro: ${
           errInfo.message || JSON.stringify(errInfo)
         }`
       );
