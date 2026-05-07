@@ -232,7 +232,7 @@ const processEmailJob = async (jobDoc) => {
 module.exports = {
   EMAIL_JOB_COLLECTION,
   hasSmtpConfig,
-  getTransporter,
+  createTransporter,
   getFromEmail,
   getSupportInbox,
   processEmailJob,
