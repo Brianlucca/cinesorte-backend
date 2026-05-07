@@ -6,7 +6,7 @@ const { db, admin } = require("../../config/firebase");
 
 const EMAIL_JOB_COLLECTION = "email_jobs";
 const MAX_INLINE_ATTEMPTS = 3;
-const MAX_QUEUE_ATTEMPTS = Number(env.EMAIL_RETRY_MAX_ATTEMPTS || 5);
+const MAX_QUEUE_ATTEMPTS = Number(env.EMAIL_RETRY_MAX_ATTEMPTS || 7);
 
 const hasSmtpConfig = () =>
   Boolean(env.SMTP_HOST && env.SMTP_PORT && env.SMTP_USER && env.SMTP_PASS);
@@ -27,6 +27,7 @@ const getTransporter = () => {
         user: env.SMTP_USER,
         pass: env.SMTP_PASS,
       },
+      family: 4,
       connectionTimeout: 20000,
       greetingTimeout: 20000,
       socketTimeout: 30000,
@@ -181,33 +182,35 @@ const processEmailJob = async (jobDoc) => {
 
   try {
     const result = await sendMailNow(payload);
-    await jobDoc.ref.update({
-      status: "sent",
-      attempts,
-      sentAt: admin.firestore.Timestamp.now(),
-      updatedAt: admin.firestore.Timestamp.now(),
-      messageId: result.messageId || null,
-      lastError: null,
-    });
-    logger.info("queued email sent: %s", payload.logLabel || jobDoc.id);
+    await jobDoc.ref.delete();
+    logger.info(
+      "queued email sent and removed: %s",
+      payload.logLabel || result.messageId || jobDoc.id
+    );
   } catch (error) {
     const shouldFailPermanently = attempts >= MAX_QUEUE_ATTEMPTS;
     const delayMinutes = Math.min(30, attempts * 2);
     const nextAttemptAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + delayMinutes * 60 * 1000));
 
+    if (shouldFailPermanently) {
+      await jobDoc.ref.delete();
+      logger.error(
+        "queued email permanently failed after %s attempts and was removed: %s",
+        attempts,
+        payload.logLabel || jobDoc.id
+      );
+      return;
+    }
+
     await jobDoc.ref.update({
-      status: shouldFailPermanently ? "failed" : "retrying",
+      status: "retrying",
       attempts,
       updatedAt: admin.firestore.Timestamp.now(),
       nextAttemptAt,
       lastError: error.message || String(error),
     });
 
-    if (shouldFailPermanently) {
-      logger.error("queued email permanently failed: %s", payload.logLabel || jobDoc.id);
-    } else {
-      logger.warn("queued email retry scheduled: %s", payload.logLabel || jobDoc.id);
-    }
+    logger.warn("queued email retry scheduled: %s", payload.logLabel || jobDoc.id);
   }
 };
 
