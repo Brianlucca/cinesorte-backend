@@ -24,34 +24,34 @@ const notifySupportTicketCreated = async ({
 }) => {
   const subjectLabel = SUBJECT_LABELS[subjectCode] || subjectCode || "Suporte";
 
-  const [userResult, supportInboxResult, supportInboxThreadResult] = await Promise.all([
-    sendSupportTicketReceivedEmail({
-      protocol,
-      userEmail,
-      userName,
-      subjectLabel,
-      createdAt,
-      originalMessage: message,
-    }),
-    sendSupportInboxTicketCreatedEmail({
-      protocol,
-      userEmail,
-      userName,
-      username,
-      message,
-      subjectLabel,
-      createdAt,
-    }),
-    sendSupportInboxThreadStartEmail({
-      protocol,
-      userEmail,
-      userName,
-      username,
-      message,
-      subjectLabel,
-      createdAt,
-    }),
-  ]);
+  const userResult = await sendSupportTicketReceivedEmail({
+    protocol,
+    userEmail,
+    userName,
+    subjectLabel,
+    createdAt,
+    originalMessage: message,
+  });
+
+  const supportInboxResult = await sendSupportInboxTicketCreatedEmail({
+    protocol,
+    userEmail,
+    userName,
+    username,
+    message,
+    subjectLabel,
+    createdAt,
+  });
+
+  const supportInboxThreadResult = await sendSupportInboxThreadStartEmail({
+    protocol,
+    userEmail,
+    userName,
+    username,
+    message,
+    subjectLabel,
+    createdAt,
+  });
 
   if (userResult?.sent === false) {
     logger.error("support user confirmation email failed: %s", userResult.error || "unknown_error");

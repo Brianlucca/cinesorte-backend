@@ -16,34 +16,30 @@ const MAX_QUEUE_ATTEMPTS = Number(env.EMAIL_RETRY_MAX_ATTEMPTS || 7);
 const hasSmtpConfig = () =>
   Boolean(env.SMTP_HOST && env.SMTP_PORT && env.SMTP_USER && env.SMTP_PASS);
 
-let transporter = null;
-
-const getTransporter = () => {
+const createTransporter = async () => {
   if (!hasSmtpConfig()) {
     return null;
   }
 
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: env.SMTP_HOST,
-      port: Number(env.SMTP_PORT),
-      secure: String(env.SMTP_SECURE).toLowerCase() === "true",
-      auth: {
-        user: env.SMTP_USER,
-        pass: env.SMTP_PASS,
-      },
-      family: 4,
-      requireTLS: String(env.SMTP_SECURE).toLowerCase() !== "true",
-      tls: {
-        servername: env.SMTP_HOST,
-      },
-      connectionTimeout: 45000,
-      greetingTimeout: 45000,
-      socketTimeout: 60000,
-    });
-  }
+  const { address } = await dns.promises.lookup(env.SMTP_HOST, { family: 4 });
 
-  return transporter;
+  return nodemailer.createTransport({
+    host: address,
+    port: Number(env.SMTP_PORT),
+    secure: String(env.SMTP_SECURE).toLowerCase() === "true",
+    auth: {
+      user: env.SMTP_USER,
+      pass: env.SMTP_PASS,
+    },
+    family: 4,
+    requireTLS: String(env.SMTP_SECURE).toLowerCase() !== "true",
+    tls: {
+      servername: env.SMTP_HOST,
+    },
+    connectionTimeout: 45000,
+    greetingTimeout: 45000,
+    socketTimeout: 60000,
+  });
 };
 
 const getFromEmail = () => env.SUPPORT_FROM_EMAIL || env.SMTP_USER;
@@ -75,7 +71,7 @@ const buildMailOptions = ({ to, subject, text, html, replyTo, threadMessageId, p
 };
 
 const sendMailNow = async (payload) => {
-  const transport = getTransporter();
+  const transport = await createTransporter();
   if (!transport) {
     return { skipped: true, reason: "smtp_not_configured" };
   }
@@ -84,12 +80,18 @@ const sendMailNow = async (payload) => {
     return { skipped: true, reason: "missing_recipient" };
   }
 
-  const info = await transport.sendMail(buildMailOptions(payload));
-  return {
-    skipped: false,
-    sent: true,
-    messageId: info?.messageId || null,
-  };
+  try {
+    const info = await transport.sendMail(buildMailOptions(payload));
+    return {
+      skipped: false,
+      sent: true,
+      messageId: info?.messageId || null,
+    };
+  } finally {
+    if (typeof transport.close === "function") {
+      transport.close();
+    }
+  }
 };
 
 const buildJobHash = (payload) =>
@@ -137,13 +139,6 @@ const queueEmailJob = async (payload, errorMessage) => {
   return { queued: true, jobId: docRef.id, deduplicated: false };
 };
 
-const resetTransporter = () => {
-  if (transporter && typeof transporter.close === "function") {
-    transporter.close();
-  }
-  transporter = null;
-};
-
 const sendMail = async (payload) => {
   if (!hasSmtpConfig()) {
     return { skipped: true, reason: "smtp_not_configured" };
@@ -166,7 +161,6 @@ const sendMail = async (payload) => {
       return { ...result, queued: false, attempts: attempt };
     } catch (error) {
       lastError = error;
-      resetTransporter();
       logger.warn("%s attempt %s failed: %s", payload.logLabel || "email_delivery", attempt, error.message || error);
       if (attempt < MAX_INLINE_ATTEMPTS) {
         await wait(1200 * attempt);
@@ -209,7 +203,6 @@ const processEmailJob = async (jobDoc) => {
       payload.logLabel || result.messageId || jobDoc.id
     );
   } catch (error) {
-    resetTransporter();
     const shouldFailPermanently = attempts >= MAX_QUEUE_ATTEMPTS;
     const delayMinutes = Math.min(30, attempts * 2);
     const nextAttemptAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + delayMinutes * 60 * 1000));
