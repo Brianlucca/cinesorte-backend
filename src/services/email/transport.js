@@ -204,6 +204,18 @@ const processEmailJob = async (jobDoc) => {
   const data = jobDoc.data() || {};
   const attempts = Number(data.attempts || 0) + 1;
   const payload = data.payload || {};
+  const updateJob = async (dataToUpdate) => {
+    try {
+      await jobDoc.ref.update(dataToUpdate);
+      return true;
+    } catch (error) {
+      if (error?.code === 5 || /NOT_FOUND/i.test(error?.message || "")) {
+        logger.warn("queued email job disappeared before update: %s", payload.logLabel || jobDoc.id);
+        return false;
+      }
+      throw error;
+    }
+  };
 
   try {
     const result = await sendMailNow(payload);
@@ -227,7 +239,7 @@ const processEmailJob = async (jobDoc) => {
       return;
     }
 
-    await jobDoc.ref.update({
+    await updateJob({
       status: "retrying",
       attempts,
       updatedAt: admin.firestore.Timestamp.now(),

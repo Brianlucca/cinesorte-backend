@@ -23,7 +23,27 @@ const processPendingJobs = async () => {
     .get();
 
   for (const doc of snapshot.docs) {
-    await processEmailJob(doc);
+    const claimed = await db.runTransaction(async (transaction) => {
+      const freshDoc = await transaction.get(doc.ref);
+      if (!freshDoc.exists) return null;
+
+      const data = freshDoc.data() || {};
+      if (!["pending", "retrying"].includes(data.status)) return null;
+
+      const nextAttemptAt = data.nextAttemptAt;
+      if (nextAttemptAt?.toMillis && nextAttemptAt.toMillis() > Date.now()) return null;
+
+      transaction.update(doc.ref, {
+        status: "processing",
+        updatedAt: admin.firestore.Timestamp.now(),
+      });
+
+      return freshDoc;
+    });
+
+    if (claimed) {
+      await processEmailJob(claimed);
+    }
   }
 };
 
