@@ -33,9 +33,13 @@ const getTransporter = () => {
         pass: env.SMTP_PASS,
       },
       family: 4,
-      connectionTimeout: 20000,
-      greetingTimeout: 20000,
-      socketTimeout: 30000,
+      requireTLS: String(env.SMTP_SECURE).toLowerCase() !== "true",
+      tls: {
+        servername: env.SMTP_HOST,
+      },
+      connectionTimeout: 45000,
+      greetingTimeout: 45000,
+      socketTimeout: 60000,
     });
   }
 
@@ -133,6 +137,13 @@ const queueEmailJob = async (payload, errorMessage) => {
   return { queued: true, jobId: docRef.id, deduplicated: false };
 };
 
+const resetTransporter = () => {
+  if (transporter && typeof transporter.close === "function") {
+    transporter.close();
+  }
+  transporter = null;
+};
+
 const sendMail = async (payload) => {
   if (!hasSmtpConfig()) {
     return { skipped: true, reason: "smtp_not_configured" };
@@ -155,6 +166,7 @@ const sendMail = async (payload) => {
       return { ...result, queued: false, attempts: attempt };
     } catch (error) {
       lastError = error;
+      resetTransporter();
       logger.warn("%s attempt %s failed: %s", payload.logLabel || "email_delivery", attempt, error.message || error);
       if (attempt < MAX_INLINE_ATTEMPTS) {
         await wait(1200 * attempt);
@@ -197,6 +209,7 @@ const processEmailJob = async (jobDoc) => {
       payload.logLabel || result.messageId || jobDoc.id
     );
   } catch (error) {
+    resetTransporter();
     const shouldFailPermanently = attempts >= MAX_QUEUE_ATTEMPTS;
     const delayMinutes = Math.min(30, attempts * 2);
     const nextAttemptAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + delayMinutes * 60 * 1000));
