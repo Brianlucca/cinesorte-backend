@@ -19,6 +19,9 @@ const isEmailPasswordUser = (userRecord) =>
   userRecord.providerData?.some((provider) => provider.providerId === "password");
 
 const shouldSkipByCooldown = (userData, cooldownMs) => {
+  const lastStatus = userData.verificationEmailLastStatus;
+  if (!["sent", "queued"].includes(lastStatus)) return false;
+
   const lastSentAt = toDate(userData.verificationEmailLastSentAt);
   if (!lastSentAt) return false;
   return Date.now() - lastSentAt.getTime() < cooldownMs;

@@ -112,6 +112,7 @@ const queueEmailJob = async (payload, errorMessage) => {
       updatedAt: admin.firestore.Timestamp.now(),
       lastError: errorMessage,
     });
+    logger.warn("email job deduplicated: %s", payload.logLabel || doc.id);
     return { queued: true, jobId: doc.id, deduplicated: true };
   }
 
@@ -128,6 +129,7 @@ const queueEmailJob = async (payload, errorMessage) => {
     lastError: errorMessage || null,
   });
 
+  logger.warn("email job queued: %s", payload.logLabel || docRef.id);
   return { queued: true, jobId: docRef.id, deduplicated: false };
 };
 
@@ -147,6 +149,8 @@ const sendMail = async (payload) => {
       const result = await sendMailNow(payload);
       if (attempt > 1) {
         logger.info("%s succeeded after retry %s", payload.logLabel || "email_delivery", attempt);
+      } else {
+        logger.info("%s sent", payload.logLabel || "email_delivery");
       }
       return { ...result, queued: false, attempts: attempt };
     } catch (error) {
