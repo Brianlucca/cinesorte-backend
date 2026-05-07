@@ -1,8 +1,13 @@
 const crypto = require("crypto");
+const dns = require("dns");
 const nodemailer = require("nodemailer");
 const env = require("../../config/env");
 const logger = require("../../utils/logger");
 const { db, admin } = require("../../config/firebase");
+
+if (typeof dns.setDefaultResultOrder === "function") {
+  dns.setDefaultResultOrder("ipv4first");
+}
 
 const EMAIL_JOB_COLLECTION = "email_jobs";
 const MAX_INLINE_ATTEMPTS = 3;
