@@ -35,6 +35,7 @@ const verifyToken = catchAsync(async (req, res, next) => {
     req.user = {
       uid: decodedClaims.uid,
       email: decodedClaims.email,
+      authTime: decodedClaims.auth_time ? decodedClaims.auth_time * 1000 : null,
       username: userData.username,
       photoURL: userData.photoURL,
       role: userData.role,

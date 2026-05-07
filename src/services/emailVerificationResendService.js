@@ -1,6 +1,6 @@
 const { auth, db, admin } = require("../config/firebase");
+const env = require("../config/env");
 const logger = require("../utils/logger");
-const { sendVerificationEmail } = require("./email");
 
 const DEFAULT_LIMIT = 100;
 const DEFAULT_MIN_AGE_MINUTES = 5;
@@ -38,6 +38,48 @@ const shouldSkipByMaxSends = (userData, maxRescueSends) => {
   return Number(userData.verificationEmailResendCount || 0) >= maxRescueSends;
 };
 
+const sendFirebaseVerificationEmail = async (uid) => {
+  const customToken = await auth.createCustomToken(uid);
+  const signInResponse = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${env.FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: customToken,
+        returnSecureToken: true,
+      }),
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  const signInData = await signInResponse.json().catch(() => ({}));
+  if (!signInResponse.ok || !signInData.idToken) {
+    throw new Error(signInData?.error?.message || "firebase_custom_token_sign_in_failed");
+  }
+
+  const sendResponse = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${env.FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestType: "VERIFY_EMAIL",
+        idToken: signInData.idToken,
+        continueUrl: `${env.FRONTEND_URL.replace(/\/$/, "")}/login`,
+      }),
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  const sendData = await sendResponse.json().catch(() => ({}));
+  if (!sendResponse.ok) {
+    throw new Error(sendData?.error?.message || "firebase_verification_email_failed");
+  }
+
+  return { sent: true, queued: false, skipped: false, provider: "firebase" };
+};
+
 const markVerificationEmailAttempt = async ({ userRef, result, dryRun }) => {
   if (dryRun) return;
 
@@ -52,6 +94,7 @@ const markVerificationEmailAttempt = async ({ userRef, result, dryRun }) => {
             ? "skipped"
             : "failed",
       verificationEmailLastError: result.error || result.reason || null,
+      verificationEmailProvider: result.provider || "firebase",
       verificationEmailResendCount: admin.firestore.FieldValue.increment(1),
       updatedAt: new Date(),
     },
@@ -60,18 +103,11 @@ const markVerificationEmailAttempt = async ({ userRef, result, dryRun }) => {
 };
 
 const sendVerificationForUser = async ({ userRecord, userData, userRef, dryRun }) => {
-  const payload = {
-    userEmail: userRecord.email,
-    userName: userData.name || userRecord.displayName || userData.username,
-    username: userData.username,
-    verificationLink: dryRun ? "dry-run" : await auth.generateEmailVerificationLink(userRecord.email),
-  };
-
   if (dryRun) {
-    return { sent: false, queued: false, skipped: true, reason: "dry_run", payload };
+    return { sent: false, queued: false, skipped: true, reason: "dry_run" };
   }
 
-  const result = await sendVerificationEmail(payload);
+  const result = await sendFirebaseVerificationEmail(userRecord.uid);
   await markVerificationEmailAttempt({ userRef, result, dryRun });
   return result;
 };

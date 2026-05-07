@@ -9,7 +9,6 @@ const {
   registerSchema,
   loginSchema,
   resendVerificationEmailSchema,
-  accountDeletionTokenSchema,
   profileSchema,
   supportTicketSchema,
 } = require('../schemas/schemas');
@@ -28,7 +27,6 @@ router.get('/me', verifyToken, authController.getMe);
 router.put('/me', verifyToken, validate(profileSchema), authController.updateProfile);
 router.post('/me/delete-request', verifyToken, authController.requestAccountDeletion);
 router.delete('/me', verifyToken, authController.deleteAccount);
-router.post('/confirm-account-deletion', validate(accountDeletionTokenSchema), authController.confirmAccountDeletion);
 router.get('/profile/:username', verifyToken, authController.getPublicProfile);
 router.get('/search', verifyToken, userController.searchUsers);
 router.post('/reset-password', authController.resetPassword);

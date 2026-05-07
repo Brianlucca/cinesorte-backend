@@ -1,5 +1,4 @@
 const axios = require("axios");
-const crypto = require("crypto");
 const admin = require("firebase-admin");
 
 const { auth, db } = require("../config/firebase");
@@ -16,11 +15,7 @@ const catchAsync = require("../utils/catchAsync");
 const logger = require("../utils/logger");
 const { containsProfanity } = require("../utils/profanity");
 const {
-  sendAccountDeletionRequestEmail,
-  sendAccountDeletionEmail,
   sendLoginAlertEmail,
-  sendPasswordResetEmail,
-  sendVerificationEmail,
   sendWelcomeEmail,
 } = require("../services/email");
 
@@ -107,8 +102,7 @@ const { resendVerificationEmailForAddress } = require("../services/emailVerifica
 const isProduction = env.NODE_ENV === "production";
 const CURRENT_TERMS_VERSION = "4.0";
 const ACCOUNT_DELETION_REQUESTS = "account_deletion_requests";
-const ACCOUNT_DELETION_TOKEN_BYTES = 32;
-const ACCOUNT_DELETION_TOKEN_TTL_MINUTES = 30;
+const RECENT_LOGIN_MAX_AGE_MS = 5 * 60 * 1000;
 
 const setNoStore = (res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
@@ -135,15 +129,69 @@ const runInBackground = (label, task) => {
     });
 };
 
-const hashToken = (token) => crypto.createHash("sha256").update(String(token || "")).digest("hex");
+const sendFirebasePasswordResetEmail = async (email) => {
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${env.FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestType: "PASSWORD_RESET",
+        email,
+        continueUrl: `${env.FRONTEND_URL.replace(/\/$/, "")}/login`,
+      }),
+      signal: AbortSignal.timeout(10000),
+    }
+  );
 
-const createSecureToken = () => crypto.randomBytes(ACCOUNT_DELETION_TOKEN_BYTES).toString("hex");
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.error?.message || "firebase_password_reset_failed");
+  }
 
-const toDate = (value) => {
-  if (!value) return null;
-  if (typeof value.toDate === "function") return value.toDate();
-  if (value instanceof Date) return value;
-  return new Date(value);
+  return data;
+};
+
+const sendFirebaseVerificationEmailByUid = async (uid) => {
+  const customToken = await auth.createCustomToken(uid);
+  const signInResponse = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${env.FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: customToken,
+        returnSecureToken: true,
+      }),
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  const signInData = await signInResponse.json().catch(() => ({}));
+  if (!signInResponse.ok || !signInData.idToken) {
+    throw new Error(signInData?.error?.message || "firebase_custom_token_sign_in_failed");
+  }
+
+  const sendResponse = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${env.FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestType: "VERIFY_EMAIL",
+        idToken: signInData.idToken,
+        continueUrl: `${env.FRONTEND_URL.replace(/\/$/, "")}/login`,
+      }),
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  const sendData = await sendResponse.json().catch(() => ({}));
+  if (!sendResponse.ok) {
+    throw new Error(sendData?.error?.message || "firebase_verification_email_failed");
+  }
+
+  return sendData;
 };
 
 async function verifyTurnstile(token, ip) {
@@ -280,30 +328,6 @@ async function deleteAccountDeletionRequests(uid) {
   await batch.commit();
 }
 
-async function deleteExpiredAccountDeletionRequests(uid) {
-  const snapshot = await db
-    .collection(ACCOUNT_DELETION_REQUESTS)
-    .where("uid", "==", uid)
-    .where("status", "==", "pending")
-    .limit(50)
-    .get();
-
-  if (snapshot.empty) return;
-
-  const now = admin.firestore.Timestamp.now();
-  const expiredDocs = snapshot.docs.filter((doc) => {
-    const request = doc.data() || {};
-    const expiresAt = request.expiresAt;
-    return expiresAt && expiresAt.toMillis && expiresAt.toMillis() <= now.toMillis();
-  });
-
-  if (!expiredDocs.length) return;
-
-  const batch = db.batch();
-  expiredDocs.forEach((doc) => batch.delete(doc.ref));
-  await batch.commit();
-}
-
 async function sendLoginSecurityAlert({ req, email, userData }) {
   if (!email) return;
 
@@ -378,41 +402,23 @@ exports.register = catchAsync(async (req, res, next) => {
   });
 
   try {
-    const verificationLink = await auth.generateEmailVerificationLink(email);
-    const verificationResult = await sendVerificationEmail({
-      userEmail: email,
-      userName: name,
-      username: nickname,
-      verificationLink,
-    });
+    await sendFirebaseVerificationEmailByUid(userRecord.uid);
 
     await userRef.set(
       {
         verificationEmailLastSentAt: admin.firestore.Timestamp.now(),
-        verificationEmailLastStatus: verificationResult.sent
-          ? "sent"
-          : verificationResult.queued
-            ? "queued"
-            : verificationResult.skipped
-              ? "skipped"
-              : "failed",
-        verificationEmailLastError: verificationResult.error || verificationResult.reason || null,
+        verificationEmailLastStatus: "sent",
+        verificationEmailLastError: null,
+        verificationEmailProvider: "firebase",
         verificationEmailResendCount: 0,
         updatedAt: new Date(),
       },
       { merge: true }
     );
-
-    if (!verificationResult.sent) {
-      logger.warn(
-        "verification email not sent immediately: %s",
-        verificationResult.error || verificationResult.reason || "queued_or_unknown"
-      );
-    }
   } catch (emailError) {
     const { sendAlert } = require("../services/telegramService");
     const errInfo = emailError.response ? emailError.response.data : emailError;
-    logger.error("sending verification email failed: %o", errInfo);
+    logger.error("firebase verification email failed: %o", errInfo);
 
     await userRef.set(
       {
@@ -806,19 +812,12 @@ exports.resetPassword = catchAsync(async (req, res, next) => {
 
   if (!userQuery.empty) {
     const userDoc = userQuery.docs[0];
-    const userData = userDoc.data() || {};
-
     try {
-      const resetLink = await auth.generatePasswordResetLink(email);
-      await sendPasswordResetEmail({
-        userEmail: email,
-        userName: userData.name || userData.username || "cinéfilo",
-        resetLink,
-      });
+      await sendFirebasePasswordResetEmail(email);
       await auth.revokeRefreshTokens(userDoc.id);
       sessionsRevoked = true;
     } catch (noticeError) {
-      logger.error("password reset email failed: %s", noticeError.message || noticeError);
+      logger.error("firebase password reset email failed: %s", noticeError.message || noticeError);
     }
   }
 
@@ -828,97 +827,30 @@ exports.resetPassword = catchAsync(async (req, res, next) => {
   res.status(200).json({ message: "Solicitação recebida." });
 });
 
-exports.requestAccountDeletion = catchAsync(async (req, res, next) => {
+exports.deleteAccount = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
+  const { confirmText } = req.body || {};
+
+  if (confirmText !== "DELETAR CONTA") {
+    return next(new AppError("Digite DELETAR CONTA para confirmar a exclusão.", 400));
+  }
+
+  const authTime = Number(req.user.authTime || 0);
+  if (!authTime || Date.now() - authTime > RECENT_LOGIN_MAX_AGE_MS) {
+    clearSessionCookies(res);
+    return next(new AppError("Por segurança, faça login novamente antes de excluir sua conta.", 401));
+  }
+
   const userRef = db.collection("users").doc(uid);
   const userDoc = await userRef.get();
   if (!userDoc.exists) return next(new AppError("Usuário não encontrado.", 404));
 
-  const userData = userDoc.data() || {};
-  if (!userData.email) return next(new AppError("Não foi possível identificar o email da sua conta.", 400));
-
-  const token = createSecureToken();
-  const tokenHash = hashToken(token);
-  const now = admin.firestore.Timestamp.now();
-  const expiresAt = admin.firestore.Timestamp.fromDate(
-    new Date(Date.now() + ACCOUNT_DELETION_TOKEN_TTL_MINUTES * 60 * 1000)
-  );
-  const confirmLink = `${env.FRONTEND_URL.replace(/\/$/, "")}/confirm-delete-account?token=${token}`;
-
-  await deleteExpiredAccountDeletionRequests(uid);
-  await deleteAccountDeletionRequests(uid);
-
-  await db.collection(ACCOUNT_DELETION_REQUESTS).doc(tokenHash).set({
-    uid,
-    status: "pending",
-    createdAt: now,
-    expiresAt,
-  });
-
-  await sendAccountDeletionRequestEmail({
-    userEmail: userData.email,
-    userName: userData.name || userData.username || "cinéfilo",
-    confirmLink,
-    expiresInMinutes: ACCOUNT_DELETION_TOKEN_TTL_MINUTES,
-  });
-
-  logAuthEvent(req, "account_deletion_requested", { uid });
-  setNoStore(res);
-  res.status(200).json({
-    message: "Enviamos um email para confirmar a exclusão da sua conta.",
-  });
-});
-
-exports.deleteAccount = exports.requestAccountDeletion;
-
-exports.confirmAccountDeletion = catchAsync(async (req, res, next) => {
-  const { token } = req.body;
-  const tokenHash = hashToken(token);
-  const requestRef = db.collection(ACCOUNT_DELETION_REQUESTS).doc(tokenHash);
-  const requestDoc = await requestRef.get();
-
-  if (!requestDoc.exists) return next(new AppError("Link inválido ou expirado.", 400));
-
-  const requestData = requestDoc.data() || {};
-  const expiresAt = toDate(requestData.expiresAt);
-
-  if (requestData.status !== "pending" || !expiresAt || expiresAt.getTime() < Date.now()) {
-    await requestRef.delete().catch(() => {});
-    return next(new AppError("Link inválido ou expirado.", 400));
-  }
-
-  const uid = requestData.uid;
-  const userRef = db.collection("users").doc(uid);
-  const userDoc = await userRef.get();
-
-  await requestRef.set(
-    {
-      status: "processing",
-      confirmedAt: admin.firestore.Timestamp.now(),
-    },
-    { merge: true }
-  );
-
-  if (userDoc.exists) {
-    const userData = userDoc.data() || {};
-    const userEmail = userData.email;
-    const userName = userData.name || userData.username || "cinéfilo";
-
-    await deleteAccountData(uid);
-
-    if (userEmail) {
-      try {
-        await sendAccountDeletionEmail({ userEmail, userName });
-      } catch (emailError) {
-        logger.error("account deletion email failed: %s", emailError.message || emailError);
-      }
-    }
-  } else {
-    await deleteAccountDeletionRequests(uid);
-  }
+  await deleteAccountData(uid);
 
   logAuthEvent(req, "account_deletion_confirmed", { uid });
   clearSessionCookies(res);
   setNoStore(res);
   res.status(200).json({ message: "Conta excluída com sucesso." });
 });
+
+exports.requestAccountDeletion = exports.deleteAccount;
