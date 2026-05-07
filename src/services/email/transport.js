@@ -16,6 +16,14 @@ const MAX_QUEUE_ATTEMPTS = Number(env.EMAIL_RETRY_MAX_ATTEMPTS || 7);
 const hasSmtpConfig = () =>
   Boolean(env.SMTP_HOST && env.SMTP_PORT && env.SMTP_USER && env.SMTP_PASS);
 
+let smtpSendChain = Promise.resolve();
+
+const runSerializedSmtpSend = (task) => {
+  const run = smtpSendChain.then(task, task);
+  smtpSendChain = run.catch(() => {});
+  return run;
+};
+
 const createTransporter = async () => {
   if (!hasSmtpConfig()) {
     return null;
@@ -71,27 +79,29 @@ const buildMailOptions = ({ to, subject, text, html, replyTo, threadMessageId, p
 };
 
 const sendMailNow = async (payload) => {
-  const transport = await createTransporter();
-  if (!transport) {
-    return { skipped: true, reason: "smtp_not_configured" };
-  }
-
   if (!payload?.to) {
     return { skipped: true, reason: "missing_recipient" };
   }
 
-  try {
-    const info = await transport.sendMail(buildMailOptions(payload));
-    return {
-      skipped: false,
-      sent: true,
-      messageId: info?.messageId || null,
-    };
-  } finally {
-    if (typeof transport.close === "function") {
-      transport.close();
+  return runSerializedSmtpSend(async () => {
+    const transport = await createTransporter();
+    if (!transport) {
+      return { skipped: true, reason: "smtp_not_configured" };
     }
-  }
+
+    try {
+      const info = await transport.sendMail(buildMailOptions(payload));
+      return {
+        skipped: false,
+        sent: true,
+        messageId: info?.messageId || null,
+      };
+    } finally {
+      if (typeof transport.close === "function") {
+        transport.close();
+      }
+    }
+  });
 };
 
 const buildJobHash = (payload) =>
