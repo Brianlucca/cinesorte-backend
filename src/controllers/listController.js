@@ -6,6 +6,51 @@ const catchAsync = require("../utils/catchAsync");
 const AppError = require("../utils/AppError");
 const { deleteByPrefix } = require("../services/cacheService");
 
+const getSharedListPostsSnapshot = (uid, listId) =>
+  db
+    .collection("shared_lists")
+    .where("userId", "==", uid)
+    .where("listId", "==", listId)
+    .get();
+
+const buildSharedListUpdate = (listData = {}) => {
+  const items = Array.isArray(listData.items) ? listData.items : [];
+
+  return {
+    listName: listData.name,
+    listItems: items,
+    listCount: items.length,
+    updatedAt: new Date(),
+  };
+};
+
+const deleteSharedListPosts = async (uid, listId) => {
+  const snapshot = await getSharedListPostsSnapshot(uid, listId);
+  if (snapshot.empty) return false;
+
+  const batch = db.batch();
+  snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+  await batch.commit();
+  await deleteByPrefix("feed:");
+  return true;
+};
+
+const syncSharedListPosts = async (uid, listId, listData = {}) => {
+  if (!listData.isPublic) {
+    return deleteSharedListPosts(uid, listId);
+  }
+
+  const snapshot = await getSharedListPostsSnapshot(uid, listId);
+  if (snapshot.empty) return false;
+
+  const update = buildSharedListUpdate(listData);
+  const batch = db.batch();
+  snapshot.docs.forEach((doc) => batch.update(doc.ref, update));
+  await batch.commit();
+  await deleteByPrefix("feed:");
+  return true;
+};
+
 const hasYearData = (item = {}) =>
   Boolean(
     item.year ||
@@ -122,6 +167,12 @@ exports.upsertList = catchAsync(async (req, res, next) => {
   }
 
   await listRef.set(listData, { merge: true });
+
+  if (listId) {
+    const updatedDoc = await listRef.get();
+    await syncSharedListPosts(uid, id, updatedDoc.data() || listData);
+  }
+
   res.status(200).json({ message: "Lista salva.", listId: id });
 });
 
@@ -221,8 +272,14 @@ exports.addMediaToList = catchAsync(async (req, res, next) => {
   );
 
   if (!exists) {
+    const updatedItems = [...currentItems, safeMediaItem];
     await listRef.update({
       items: admin.firestore.FieldValue.arrayUnion(safeMediaItem),
+      updatedAt: new Date(),
+    });
+    await syncSharedListPosts(uid, listId, {
+      ...doc.data(),
+      items: updatedItems,
       updatedAt: new Date(),
     });
   }
@@ -357,6 +414,7 @@ exports.deleteList = catchAsync(async (req, res, next) => {
   if (!doc.exists) return next(new AppError("Lista não encontrada.", 404));
 
   await ref.delete();
+  await deleteSharedListPosts(uid, listId);
   res.status(200).json({ message: "Lista deletada." });
 });
 
@@ -377,6 +435,11 @@ exports.removeMediaFromList = catchAsync(async (req, res, next) => {
   );
 
   await listRef.update({ items: updatedItems, updatedAt: new Date() });
+  await syncSharedListPosts(uid, listId, {
+    ...doc.data(),
+    items: updatedItems,
+    updatedAt: new Date(),
+  });
   res.status(200).json({ message: "Removido." });
 });
 
@@ -400,8 +463,13 @@ exports.shareList = catchAsync(async (req, res, next) => {
 
   const userDoc = await db.collection("users").doc(uid).get();
   const userData = userDoc.data();
+  const sharedListsSnapshot = await getSharedListPostsSnapshot(uid, listId);
+  const existingShare = sharedListsSnapshot.docs[0];
+  const existingShareData = existingShare?.data?.() || {};
+  const defaultContent = `Confira minha nova coleÃ§Ã£o: ${listData.name}`;
+  const contentFallback = `Confira minha nova colecao: ${listData.name}`;
 
-  const newShare = {
+  const sharedListPayload = {
     userId: uid,
     username: userData.username,
     userPhoto: userData.photoURL || null,
@@ -412,14 +480,31 @@ exports.shareList = catchAsync(async (req, res, next) => {
     listCount: Array.isArray(listData.items) ? listData.items.length : 0,
     content: content || `Confira minha nova coleção: ${listData.name}`,
     type: "list_share",
-    createdAt: new Date(),
-    likesCount: 0,
-    commentsCount: 0,
+    content: content || existingShareData.content || contentFallback,
+    updatedAt: new Date(),
   };
 
-  const docRef = await db.collection("shared_lists").add(newShare);
+  let sharedListId;
+  if (existingShare) {
+    sharedListId = existingShare.id;
+    const batch = db.batch();
+    batch.update(existingShare.ref, sharedListPayload);
+    sharedListsSnapshot.docs.slice(1).forEach((duplicateDoc) => {
+      batch.delete(duplicateDoc.ref);
+    });
+    await batch.commit();
+  } else {
+    const docRef = await db.collection("shared_lists").add({
+      ...sharedListPayload,
+      createdAt: new Date(),
+      likesCount: 0,
+      commentsCount: 0,
+    });
+    sharedListId = docRef.id;
+  }
   await deleteByPrefix("feed:");
+  const docRef = { id: sharedListId };
   res
-    .status(201)
+    .status(existingShare ? 200 : 201)
     .json({ id: docRef.id, message: "Coleção compartilhada com sucesso!" });
 });
