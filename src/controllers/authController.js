@@ -14,89 +14,7 @@ const AppError = require("../utils/AppError");
 const catchAsync = require("../utils/catchAsync");
 const logger = require("../utils/logger");
 const { containsProfanity } = require("../utils/profanity");
-const {
-  sendLoginAlertEmail,
-  sendWelcomeEmail,
-} = require("../services/email");
 
-const normalizeIp = (rawIp = "") => {
-  const ip = String(rawIp || "").trim();
-  if (!ip) return "";
-  if (ip.startsWith("::ffff:")) return ip.slice(7);
-  if (ip === "::1") return "127.0.0.1";
-  return ip;
-};
-
-const isPrivateIp = (ip = "") => /^(127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|fc00:|fe80:|::1)/i.test(ip);
-
-const formatUserAgent = (userAgent = "") => {
-  const ua = String(userAgent || "").trim();
-  if (!ua) return "não identificado";
-
-  const browser = /Edg\//.test(ua) || /Edge\//.test(ua)
-    ? "Microsoft Edge"
-    : /OPR\//.test(ua) || /Opera/.test(ua)
-    ? "Opera"
-    : /CriOS/.test(ua) || (/Chrome\//.test(ua) && /Safari\//.test(ua))
-    ? "Chrome"
-    : /Firefox\//.test(ua)
-    ? "Firefox"
-    : /Safari\//.test(ua)
-    ? "Safari"
-    : /MSIE|Trident\//.test(ua)
-    ? "Internet Explorer"
-    : /SamsungBrowser\//.test(ua)
-    ? "Samsung Internet"
-    : "navegador desconhecido";
-
-  const os = /Windows NT 10/.test(ua)
-    ? "Windows 10"
-    : /Windows NT 6\.3/.test(ua)
-    ? "Windows 8.1"
-    : /Windows NT 6\.2/.test(ua)
-    ? "Windows 8"
-    : /Windows NT 6\.1/.test(ua)
-    ? "Windows 7"
-    : /Mac OS X/.test(ua)
-    ? "macOS"
-    : /Android/.test(ua)
-    ? "Android"
-    : /iPhone|iPad|iPod/.test(ua)
-    ? "iOS"
-    : /Linux/.test(ua)
-    ? "Linux"
-    : "sistema desconhecido";
-
-  const device = /Mobile|iPhone|iPad|iPod|Android/.test(ua) ? "móvel" : "desktop";
-
-  return `${browser} em ${os} (${device})`;
-};
-
-const lookupIpLocation = async (ip) => {
-  const normalizedIp = normalizeIp(ip);
-  if (!normalizedIp || isPrivateIp(normalizedIp)) return null;
-
-  try {
-    const response = await axios.get(`https://ipapi.co/${encodeURIComponent(normalizedIp)}/json/`, {
-      timeout: 2500,
-    });
-
-    const data = response.data || {};
-    if (data.error || !data.country_name || typeof data.latitude !== "number" || typeof data.longitude !== "number") {
-      return null;
-    }
-
-    return {
-      city: data.city || null,
-      region: data.region || null,
-      countryName: data.country_name || null,
-      latitude: data.latitude,
-      longitude: data.longitude,
-    };
-  } catch (error) {
-    return null;
-  }
-};
 const { resendVerificationEmailForAddress } = require("../services/emailVerificationResendService");
 
 const isProduction = env.NODE_ENV === "production";
@@ -119,14 +37,6 @@ const logAuthEvent = (req, event, details = {}) => {
     method: req.method,
     ...details,
   });
-};
-
-const runInBackground = (label, task) => {
-  Promise.resolve()
-    .then(task)
-    .catch((error) => {
-      logger.error("%s failed: %s", label, error?.message || error);
-    });
 };
 
 const sendFirebasePasswordResetEmail = async (email) => {
@@ -287,24 +197,6 @@ async function syncUsernameAndPhoto(uid, newUsername, newPhoto) {
   }
 }
 
-async function sendWelcomeAfterVerification({ userRef, userData = {}, userEmail, userName, username }) {
-  if (!userEmail || userData.welcomeEmailSentAt) return;
-
-  await sendWelcomeEmail({
-    userEmail,
-    userName,
-    username,
-  });
-
-  await userRef.set(
-    {
-      emailConfirmedAt: userData.emailConfirmedAt || new Date(),
-      welcomeEmailSentAt: new Date(),
-    },
-    { merge: true }
-  );
-}
-
 async function deleteAccountData(uid) {
   const userRef = db.collection("users").doc(uid);
 
@@ -326,24 +218,6 @@ async function deleteAccountDeletionRequests(uid) {
   const batch = db.batch();
   snapshot.docs.forEach((doc) => batch.delete(doc.ref));
   await batch.commit();
-}
-
-async function sendLoginSecurityAlert({ req, email, userData }) {
-  if (!email) return;
-
-  const normalizedIp = normalizeIp(req.ip || "");
-  const accessLocation = await lookupIpLocation(normalizedIp);
-  const resetLink = await auth.generatePasswordResetLink(email);
-
-  await sendLoginAlertEmail({
-    userEmail: email,
-    userName: userData.name || userData.username || "cinéfilo",
-    resetLink,
-    accessDate: new Date().toLocaleString("pt-BR", { timeZone: "America/Bahia" }),
-    ip: normalizedIp || "não identificado",
-    userAgent: formatUserAgent(req.headers["user-agent"]),
-    location: accessLocation,
-  });
 }
 
 exports.register = catchAsync(async (req, res, next) => {
@@ -466,19 +340,7 @@ exports.login = catchAsync(async (req, res, next) => {
     const userDoc = await userRef.get();
     const userData = userDoc.data() || {};
 
-    if (userInfo.emailVerified && !userData.welcomeEmailSentAt) {
-      try {
-        await sendWelcomeAfterVerification({
-          userRef,
-          userData,
-          userEmail: email,
-          userName: userData.name,
-          username: userData.username,
-        });
-      } catch (welcomeError) {
-        logger.error("welcome email failed after verification: %s", welcomeError.message || welcomeError);
-      }
-    } else if (userInfo.emailVerified && !userData.emailConfirmedAt) {
+    if (userInfo.emailVerified && !userData.emailConfirmedAt) {
       await userRef.set({ emailConfirmedAt: new Date() }, { merge: true });
     }
 
@@ -491,9 +353,6 @@ exports.login = catchAsync(async (req, res, next) => {
     }
 
     logAuthEvent(req, "login_success", { uid: response.data.localId, email, username: userData.username || null });
-    runInBackground("login security alert email", () =>
-      sendLoginSecurityAlert({ req, email, userData })
-    );
     setNoStore(res);
     res.status(200).json({
       uid: response.data.localId,
@@ -610,24 +469,10 @@ exports.googleAuth = catchAsync(async (req, res, next) => {
   }
 
   if (createdNow && email) {
-    try {
-      await sendWelcomeEmail({ userEmail: email, userName: userData.name, username: userData.username });
-      await userRef.set(
-        {
-          emailConfirmedAt: new Date(),
-          welcomeEmailSentAt: new Date(),
-        },
-        { merge: true }
-      );
-    } catch (welcomeError) {
-      logger.error("welcome email failed on google auth: %s", welcomeError.message || welcomeError);
-    }
+    await userRef.set({ emailConfirmedAt: new Date() }, { merge: true });
   }
 
   logAuthEvent(req, "google_auth_success", { uid, email, username: userData.username });
-  runInBackground("google login security alert email", () =>
-    sendLoginSecurityAlert({ req, email, userData })
-  );
   setNoStore(res);
   res.status(200).json({
     uid,

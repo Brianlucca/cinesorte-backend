@@ -1,6 +1,5 @@
 const env = require("../config/env");
 const logger = require("../utils/logger");
-const { hasSmtpConfig } = require("./email");
 const { resendPendingVerificationEmails } = require("./emailVerificationResendService");
 
 let started = false;
@@ -16,8 +15,6 @@ const COOLDOWN_HOURS = Number(env.VERIFICATION_EMAIL_RESCUE_COOLDOWN_HOURS || 6)
 const MAX_RESCUE_SENDS = Number(env.VERIFICATION_EMAIL_RESCUE_MAX_SENDS || 1);
 
 const runOnce = async () => {
-  if (!hasSmtpConfig()) return;
-
   const summary = await resendPendingVerificationEmails({
     limit: LIMIT,
     minAgeMinutes: MIN_AGE_MINUTES,
@@ -65,7 +62,7 @@ const tick = async () => {
 };
 
 const startVerificationEmailRescueWorker = () => {
-  if (started || !isEnabled() || !hasSmtpConfig()) return;
+  if (started || !isEnabled()) return;
   started = true;
   tick();
   logger.info("Verification email rescue worker ativo");

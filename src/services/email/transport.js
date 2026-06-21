@@ -10,6 +10,7 @@ if (typeof dns.setDefaultResultOrder === "function") {
 }
 
 const EMAIL_JOB_COLLECTION = "email_jobs";
+const SMTP_OUTBOUND_ENABLED = false;
 const MAX_INLINE_ATTEMPTS = 3;
 const MAX_QUEUE_ATTEMPTS = Number(env.EMAIL_RETRY_MAX_ATTEMPTS || 7);
 
@@ -79,6 +80,11 @@ const buildMailOptions = ({ to, subject, text, html, replyTo, threadMessageId, p
 };
 
 const sendMailNow = async (payload) => {
+  // SMTP de saida desativado. Confirmacao e redefinicao de senha usam Firebase.
+  if (!SMTP_OUTBOUND_ENABLED) {
+    return { skipped: true, sent: false, reason: "smtp_disabled" };
+  }
+
   if (!payload?.to) {
     return { skipped: true, reason: "missing_recipient" };
   }
@@ -150,6 +156,11 @@ const queueEmailJob = async (payload, errorMessage) => {
 };
 
 const sendMail = async (payload) => {
+  // Impede conexoes, retries e novos jobs SMTP em qualquer fluxo da aplicacao.
+  if (!SMTP_OUTBOUND_ENABLED) {
+    return { skipped: true, sent: false, queued: false, reason: "smtp_disabled" };
+  }
+
   if (!hasSmtpConfig()) {
     return { skipped: true, reason: "smtp_not_configured" };
   }

@@ -12,10 +12,6 @@ const {
   tmdbApiLimiter,
 } = require("./middleware/security");
 const { startBotListener } = require("./services/telegramService");
-const { startSupportInboxListener } = require("./services/supportInboxService");
-const { startEmailRetryWorker } = require("./services/email/retryWorker");
-const { startVerificationEmailRescueWorker } = require("./services/emailVerificationRescueWorker");
-const { startAccountDeletionRequestCleanupWorker } = require("./services/accountDeletionRequestCleanupWorker");
 
 const tmdbRoutes = require("./routes/tmdbRoutes");
 const interactionRoutes = require("./routes/interactionRoutes");
@@ -101,10 +97,6 @@ if (require.main === module) {
     require("./utils/logger").info(`Secure server running on port ${env.PORT}`);
     if (env.NODE_ENV !== "test") {
       startBotListener();
-      startSupportInboxListener();
-      startEmailRetryWorker();
-      startVerificationEmailRescueWorker();
-      startAccountDeletionRequestCleanupWorker();
     }
   });
 }
