@@ -6,14 +6,14 @@ const userController = require('../controllers/userController');
 const authController = require('../controllers/authController');
 const { verifyToken, optionalVerify, requireTerms } = require('../middleware/auth');
 const validate = require('../middleware/validate');
-const { listSchema, addToListSchema, profileSchema } = require('../schemas/schemas');
+const { listSchema, addToListSchema, profileSchema, interactionSchema } = require('../schemas/schemas');
 
 router.get('/search', verifyToken, userController.searchUsers);
 router.get('/profile/:username', userController.getUserProfile);
 router.put('/me', verifyToken, validate(profileSchema), authController.updateProfile);
 router.post('/terms', verifyToken, userController.acceptTerms);
 
-router.post('/interact', verifyToken, interactionController.recordInteraction);
+router.post('/interact', verifyToken, validate(interactionSchema), interactionController.recordInteraction);
 router.get('/interactions', verifyToken, interactionController.getUserInteractions);
 router.get('/diary', verifyToken, interactionController.getWatchDiary);
 
