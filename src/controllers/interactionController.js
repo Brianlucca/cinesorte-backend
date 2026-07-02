@@ -8,7 +8,9 @@ const { deleteByPrefix } = require("../services/cacheService");
 
 exports.recordInteraction = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
-  const { mediaId, mediaType, action, mediaTitle, posterPath } = req.body;
+  const { mediaId, mediaType, action, mediaTitle } = req.body;
+  const posterPath = req.body.posterPath || req.body.poster_path || '';
+  const backdropPath = req.body.backdropPath || req.body.backdrop_path || '';
 
   if (
     !mediaId ||
@@ -35,6 +37,7 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
 
     if (mediaTitle) data.mediaTitle = mediaTitle;
     if (posterPath) data.posterPath = posterPath;
+    if (backdropPath) data.backdropPath = backdropPath;
 
     let genreWeight = 0;
     let xpEarned = 0;

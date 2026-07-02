@@ -37,6 +37,17 @@ const profileSchema = z.object({
   backgroundURL: safeUrlSchema.optional(),
 });
 
+const interactionSchema = z.object({
+  mediaId: z.union([z.string(), z.number()]),
+  mediaType: z.enum(['movie', 'tv', 'person', 'episode']).optional(),
+  action: z.enum(['like', 'dislike', 'watched', 'favorite']),
+  mediaTitle: z.string().optional(),
+  posterPath: z.string().nullable().optional(),
+  backdropPath: z.string().nullable().optional(),
+  poster_path: z.string().nullable().optional(),
+  backdrop_path: z.string().nullable().optional(),
+});
+
 const reviewSchema = z.object({
   mediaId: z.union([z.string(), z.number()]),
   mediaType: z.enum(['movie', 'tv', 'person', 'episode']),
@@ -106,6 +117,7 @@ module.exports = {
   resendVerificationEmailSchema,
   accountDeletionTokenSchema,
   profileSchema,
+  interactionSchema,
   reviewSchema,
   reviewUpdateSchema,
   commentSchema,
