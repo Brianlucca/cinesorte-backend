@@ -5,12 +5,16 @@ const { sendAlert } = require("../services/telegramService");
 const userTracker = new Map();
 const SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-setInterval(() => {
+const trackerCleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [key, val] of userTracker.entries()) {
     if (now - val.start > 120000) userTracker.delete(key);
   }
 }, 60000);
+
+if (typeof trackerCleanupInterval.unref === "function") {
+  trackerCleanupInterval.unref();
+}
 
 const normalizeOrigin = (value) => {
   if (!value) return "";
@@ -52,6 +56,12 @@ const tmdbApiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
   max: 200,
   message: { message: "Muitas requisições." },
+});
+
+const messageLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 180,
+  message: { message: "Muitas acoes de mensagem. Tente novamente em instantes." },
 });
 
 const authLimiter = rateLimit({
@@ -171,6 +181,7 @@ const sanitizeInput = (req, res, next) => {
 
 module.exports = {
   tmdbApiLimiter,
+  messageLimiter,
   authLimiter,
   registerLimiter,
   verificationEmailLimiter,

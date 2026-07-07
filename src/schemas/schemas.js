@@ -111,6 +111,57 @@ const supportTicketSchema = z.object({
   message: z.string().trim().min(10, 'A mensagem deve ter pelo menos 10 caracteres.').max(1000, 'A mensagem pode ter no máximo 1000 caracteres.'),
 });
 
+const messageMediaSchema = z.object({
+  id: z.union([z.string(), z.number()]),
+  mediaId: z.union([z.string(), z.number()]).optional(),
+  mediaType: z.enum(['movie', 'tv', 'episode']).optional(),
+  title: z.string().trim().min(1).max(160),
+  posterPath: z.string().nullable().optional(),
+  poster_path: z.string().nullable().optional(),
+  backdropPath: z.string().nullable().optional(),
+  backdrop_path: z.string().nullable().optional(),
+  voteAverage: z.number().min(0).max(10).nullable().optional(),
+  vote_average: z.number().min(0).max(10).nullable().optional(),
+  releaseDate: z.string().nullable().optional(),
+  release_date: z.string().nullable().optional(),
+  firstAirDate: z.string().nullable().optional(),
+  first_air_date: z.string().nullable().optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+const createDirectConversationSchema = z
+  .object({
+    targetUserId: z.string().trim().min(1).max(128).optional(),
+    targetUsername: z.string().trim().min(3).max(30).regex(/^[a-z0-9_]+$/).optional(),
+  })
+  .refine((data) => data.targetUserId || data.targetUsername, 'Informe o usuario da conversa.');
+
+const createGroupConversationSchema = z.object({
+  name: z.string().trim().min(2).max(60),
+  memberIds: z.array(z.string().trim().min(1).max(128)).max(30).optional(),
+  memberUsernames: z.array(z.string().trim().min(3).max(30).regex(/^[a-z0-9_]+$/)).max(30).optional(),
+  photoURL: safeUrlSchema.optional(),
+});
+
+const sendMessageSchema = z
+  .object({
+    text: z.string().trim().max(2000).optional().default(''),
+    media: messageMediaSchema.nullable().optional(),
+  })
+  .refine((data) => data.text.length > 0 || data.media, 'Mensagem deve ter texto ou card de midia.');
+
+const updateGroupConversationSchema = z.object({
+  name: z.string().trim().min(2).max(60).optional(),
+  photoURL: safeUrlSchema.nullable().optional(),
+});
+
+const addGroupMembersSchema = z
+  .object({
+    memberIds: z.array(z.string().trim().min(1).max(128)).max(30).optional(),
+    memberUsernames: z.array(z.string().trim().min(3).max(30).regex(/^[a-z0-9_]+$/)).max(30).optional(),
+  })
+  .refine((data) => (data.memberIds?.length || 0) > 0 || (data.memberUsernames?.length || 0) > 0, 'Informe membros para adicionar.');
+
 module.exports = {
   registerSchema,
   loginSchema,
@@ -125,4 +176,9 @@ module.exports = {
   listSchema,
   addToListSchema,
   supportTicketSchema,
+  createDirectConversationSchema,
+  createGroupConversationSchema,
+  sendMessageSchema,
+  updateGroupConversationSchema,
+  addGroupMembersSchema,
 };

@@ -2,10 +2,11 @@ const { db } = require("../config/firebase");
 const catchAsync = require("../utils/catchAsync");
 const { remember, del } = require("../services/cacheService");
 const { notificationsCountKey, notificationsListKey } = require("../services/cacheKeys");
+const messageService = require("../services/messageService");
 
 exports.getNotifications = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
-  const notifications = await remember(notificationsListKey(uid), 10, async () => {
+  const firestoreNotifications = await remember(notificationsListKey(uid), 10, async () => {
     const snapshot = await db
       .collection("notifications")
       .where("recipientId", "==", uid)
@@ -40,6 +41,10 @@ exports.getNotifications = catchAsync(async (req, res, next) => {
       };
     });
   });
+  const messageNotifications = await messageService.getMessageNotificationSummaries(uid, 5);
+  const notifications = [...messageNotifications, ...firestoreNotifications]
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, 20);
 
   res.status(200).json(notifications);
 });
@@ -47,6 +52,12 @@ exports.getNotifications = catchAsync(async (req, res, next) => {
 exports.markAsRead = catchAsync(async (req, res, next) => {
   const { notificationId } = req.params;
   const { uid } = req.user;
+
+  if (notificationId.startsWith("message_")) {
+    const conversationId = notificationId.replace(/^message_/, "");
+    await messageService.markConversationRead(uid, conversationId);
+    return res.status(200).json({ message: "Lida." });
+  }
 
   const notifRef = db.collection("notifications").doc(notificationId);
   const doc = await notifRef.get();
@@ -61,7 +72,7 @@ exports.markAsRead = catchAsync(async (req, res, next) => {
 
 exports.getUnreadCount = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
-  const count = await remember(notificationsCountKey(uid), 10, async () => {
+  const notificationCount = await remember(notificationsCountKey(uid), 10, async () => {
     const query = db
       .collection("notifications")
       .where("recipientId", "==", uid)
@@ -75,5 +86,7 @@ exports.getUnreadCount = catchAsync(async (req, res, next) => {
       return snapshot.size;
     }
   });
+  const messageCount = await messageService.getTotalUnreadCount(uid);
+  const count = notificationCount + messageCount;
   return res.status(200).json({ count });
 });

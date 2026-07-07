@@ -10,6 +10,7 @@ const {
   protectStateChangingRequests,
   userSpamDetector,
   tmdbApiLimiter,
+  messageLimiter,
 } = require("./middleware/security");
 const { startBotListener } = require("./services/telegramService");
 
@@ -18,6 +19,7 @@ const interactionRoutes = require("./routes/interactionRoutes");
 const socialRoutes = require("./routes/socialRoutes");
 const authRoutes = require("./routes/authRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
+const messageRoutes = require("./routes/messageRoutes");
 
 const app = express();
 
@@ -41,7 +43,7 @@ const corsOptions = {
     }
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
 };
 
@@ -69,6 +71,7 @@ app.use("/api/users", authRoutes);
 app.use("/api/users", interactionRoutes);
 app.use("/api/social", socialRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/messages", messageLimiter, messageRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
