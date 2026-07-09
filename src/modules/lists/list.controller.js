@@ -466,7 +466,7 @@ exports.shareList = catchAsync(async (req, res, next) => {
   const sharedListsSnapshot = await getSharedListPostsSnapshot(uid, listId);
   const existingShare = sharedListsSnapshot.docs[0];
   const existingShareData = existingShare?.data?.() || {};
-  const defaultContent = `Confira minha nova coleÃ§Ã£o: ${listData.name}`;
+  const defaultContent = `Confira minha nova coleção: ${listData.name}`;
   const contentFallback = `Confira minha nova colecao: ${listData.name}`;
 
   const sharedListPayload = {

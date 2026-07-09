@@ -498,10 +498,14 @@ function isValidUsername(value) {
 }
 
 async function deleteCollectionData(collectionName, userId) {
+  return deleteCollectionDataByField(collectionName, "userId", userId);
+}
+
+async function deleteCollectionDataByField(collectionName, field, value) {
   const batchSize = 400;
 
   while (true) {
-    const snapshot = await db.collection(collectionName).where("userId", "==", userId).limit(batchSize).get();
+    const snapshot = await db.collection(collectionName).where(field, "==", value).limit(batchSize).get();
     if (snapshot.empty) break;
 
     const batch = db.batch();
@@ -511,20 +515,57 @@ async function deleteCollectionData(collectionName, userId) {
   }
 }
 
-async function deleteSubcollections(userRef) {
-  const subcollections = ["lists", "followers", "following", "history"];
+async function deleteDocumentSubcollections(docRef, fallbackSubcollections = []) {
   const batchSize = 400;
+  let subcollectionIds = fallbackSubcollections;
 
-  for (const sub of subcollections) {
+  if (typeof docRef.listCollections === "function") {
+    const subcollections = await docRef.listCollections();
+    subcollectionIds = [...new Set([...fallbackSubcollections, ...subcollections.map((collection) => collection.id)])];
+  }
+
+  for (const sub of subcollectionIds) {
     while (true) {
-      const snapshot = await userRef.collection(sub).limit(batchSize).get();
+      const snapshot = await docRef.collection(sub).limit(batchSize).get();
       if (snapshot.empty) break;
+
+      for (const doc of snapshot.docs) {
+        await deleteDocumentSubcollections(doc.ref);
+      }
 
       const batch = db.batch();
       snapshot.docs.forEach((doc) => batch.delete(doc.ref));
       await batch.commit();
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+  }
+}
+
+async function deleteSubcollections(userRef) {
+  await deleteDocumentSubcollections(userRef, [
+    "lists",
+    "followers",
+    "following",
+    "history",
+    "security_events",
+  ]);
+}
+
+async function deleteSocialRelationshipReferences(uid, userRef) {
+  const [followingSnapshot, followersSnapshot] = await Promise.all([
+    userRef.collection("following").get(),
+    userRef.collection("followers").get(),
+  ]);
+  const refs = [
+    ...followingSnapshot.docs.map((doc) => db.collection("users").doc(doc.id).collection("followers").doc(uid)),
+    ...followersSnapshot.docs.map((doc) => db.collection("users").doc(doc.id).collection("following").doc(uid)),
+  ];
+
+  for (let index = 0; index < refs.length; index += 400) {
+    const batch = db.batch();
+    refs.slice(index, index + 400).forEach((ref) => batch.delete(ref));
+    await batch.commit();
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
 
@@ -560,10 +601,15 @@ async function syncUsernameAndPhoto(uid, newUsername, newPhoto) {
 async function deleteAccountData(uid) {
   const userRef = db.collection("users").doc(uid);
 
+  await deleteSocialRelationshipReferences(uid, userRef);
   await deleteCollectionData("reviews", uid);
   await deleteCollectionData("comments", uid);
   await deleteCollectionData("interactions", uid);
   await deleteCollectionData("shared_lists", uid);
+  await deleteCollectionData("user_review_likes", uid);
+  await deleteCollectionData("support_tickets", uid);
+  await deleteCollectionDataByField("notifications", "recipientId", uid);
+  await deleteCollectionDataByField("notifications", "senderId", uid);
 
   await deleteSubcollections(userRef);
   await deleteAccountDeletionRequests(uid);
