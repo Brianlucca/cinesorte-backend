@@ -10,6 +10,8 @@ const {
   loginSchema,
   resendVerificationEmailSchema,
   changeEmailSchema,
+  verifyCurrentPasswordSchema,
+  confirmEmailChangeSchema,
   changePasswordSchema,
   linkGoogleSchema,
   linkPasswordSchema,
@@ -29,7 +31,9 @@ router.post('/auth/google', authLimiter, authController.googleAuth);
 router.post('/logout', authController.logout);
 router.get('/me', verifyToken, authController.getMe);
 router.get('/security', verifyToken, authController.getSecurityOverview);
+router.post('/security/verify-password', verifyToken, validate(verifyCurrentPasswordSchema), authController.verifyCurrentPassword);
 router.post('/security/change-email', verifyToken, validate(changeEmailSchema), authController.requestEmailChange);
+router.post('/security/confirm-email-change', validate(confirmEmailChangeSchema), authController.confirmEmailChange);
 router.post('/security/change-password', verifyToken, validate(changePasswordSchema), authController.changePassword);
 router.post('/security/link-google', verifyToken, validate(linkGoogleSchema), authController.linkGoogleAccount);
 router.post('/security/link-password', verifyToken, validate(linkPasswordSchema), authController.linkPasswordAccount);

@@ -1,5 +1,6 @@
 const axios = require("axios");
 const admin = require("firebase-admin");
+const crypto = require("crypto");
 
 const { auth, db } = require("../../config/firebase");
 const env = require("../../config/env");
@@ -21,6 +22,7 @@ const isProduction = env.NODE_ENV === "production";
 const CURRENT_TERMS_VERSION = "4.0";
 const ACCOUNT_DELETION_REQUESTS = "account_deletion_requests";
 const RECENT_LOGIN_MAX_AGE_MS = 5 * 60 * 1000;
+const EMAIL_CHANGE_TOKEN_MAX_AGE_MS = 60 * 60 * 1000;
 
 const setNoStore = (res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
@@ -120,6 +122,81 @@ const formatSecurityEvent = (doc) => {
     userAgent: data.userAgent || null,
     createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : data.createdAt || null,
   };
+};
+
+const reconcileEmailAndLinkedProviders = async (req, uid, userRef, userData = {}) => {
+  let authUser = await auth.getUser(uid);
+  const providerData = Array.isArray(authUser.providerData) ? authUser.providerData : [];
+  const providerIds = providerData.map((provider) => provider.providerId);
+  const googleProvider = providerData.find((provider) => provider.providerId === "google.com");
+  const hasPasswordProvider = providerIds.includes("password");
+  const hasGoogleProvider = providerIds.includes("google.com");
+  const authEmail = authUser.email || null;
+  const updates = {};
+  const nextUserData = { ...userData };
+  let googleWasUnlinked = false;
+
+  if (authEmail && authEmail !== userData.email) {
+    updates.email = authEmail;
+    updates.pendingEmailChange = admin.firestore.FieldValue.delete();
+    updates.emailChangeRequestedAt = admin.firestore.FieldValue.delete();
+    nextUserData.email = authEmail;
+    delete nextUserData.pendingEmailChange;
+    delete nextUserData.emailChangeRequestedAt;
+  }
+
+  if (
+    hasPasswordProvider &&
+    hasGoogleProvider &&
+    authEmail &&
+    googleProvider?.email &&
+    googleProvider.email.toLowerCase() !== authEmail.toLowerCase()
+  ) {
+    await auth.updateUser(uid, { providersToUnlink: ["google.com"] });
+    authUser = await auth.getUser(uid);
+    googleWasUnlinked = true;
+
+    updates.provider = "email";
+    updates.googleSub = admin.firestore.FieldValue.delete();
+    updates.googleLinkedAt = admin.firestore.FieldValue.delete();
+    nextUserData.provider = "email";
+    delete nextUserData.googleSub;
+    delete nextUserData.googleLinkedAt;
+  } else if (hasPasswordProvider && hasGoogleProvider && userData.provider !== "email_google") {
+    updates.provider = "email_google";
+    nextUserData.provider = "email_google";
+  } else if (hasPasswordProvider && !hasGoogleProvider && userData.provider !== "email") {
+    updates.provider = "email";
+    nextUserData.provider = "email";
+  } else if (!hasPasswordProvider && hasGoogleProvider && userData.provider !== "google") {
+    updates.provider = "google";
+    nextUserData.provider = "google";
+  }
+
+  if (authUser.emailVerified && !userData.emailConfirmedAt) {
+    updates.emailConfirmedAt = new Date();
+    nextUserData.emailConfirmedAt = updates.emailConfirmedAt;
+  }
+
+  if (Object.keys(updates).length > 0) {
+    updates.updatedAt = new Date();
+    await userRef.set(updates, { merge: true });
+  }
+
+  if (googleWasUnlinked) {
+    logAuthEvent(req, "google_unlinked_due_email_change", {
+      uid,
+      email: authEmail,
+      googleEmail: googleProvider.email || null,
+    });
+    await recordSecurityEvent(req, uid, "google_unlinked_due_email_change", {
+      provider: "email",
+      email: authEmail,
+      username: userData.username || null,
+    });
+  }
+
+  return { authUser, userData: nextUserData };
 };
 
 const sendFirebasePasswordResetEmail = async (email) => {
@@ -330,7 +407,10 @@ const updateFirebasePassword = async (idToken, newPassword, email = null) => {
   return data;
 };
 
-const sendFirebaseEmailChangeVerification = async (idToken, newEmail) => {
+const sendFirebaseEmailChangeVerification = async (idToken, newEmail, confirmationToken) => {
+  const continueUrl = new URL(`${env.FRONTEND_URL.replace(/\/$/, "")}/email-change-complete`);
+  continueUrl.searchParams.set("token", confirmationToken);
+
   const response = await fetch(
     `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${env.FIREBASE_WEB_API_KEY}`,
     {
@@ -340,7 +420,7 @@ const sendFirebaseEmailChangeVerification = async (idToken, newEmail) => {
         requestType: "VERIFY_AND_CHANGE_EMAIL",
         idToken,
         newEmail,
-        continueUrl: `${env.FRONTEND_URL.replace(/\/$/, "")}/app/settings?tab=security`,
+        continueUrl: continueUrl.toString(),
       }),
       signal: AbortSignal.timeout(10000),
     }
@@ -603,26 +683,15 @@ exports.login = catchAsync(async (req, res, next) => {
       { email, password, returnSecureToken: true }
     );
 
-    const userInfo = await auth.getUser(response.data.localId);
+    let userInfo = await auth.getUser(response.data.localId);
     if (!userInfo.emailVerified) return next(new AppError("Email não verificado.", 403));
 
     const userRef = db.collection("users").doc(response.data.localId);
     const userDoc = await userRef.get();
-    const userData = userDoc.data() || {};
-
-    const loginUpdates = {};
-    if (userInfo.email && userInfo.email !== userData.email) {
-      loginUpdates.email = userInfo.email;
-      loginUpdates.pendingEmailChange = admin.firestore.FieldValue.delete();
-      loginUpdates.emailChangeRequestedAt = admin.firestore.FieldValue.delete();
-    }
-    if (userInfo.emailVerified && !userData.emailConfirmedAt) {
-      loginUpdates.emailConfirmedAt = new Date();
-    }
-
-    if (Object.keys(loginUpdates).length > 0) {
-      await userRef.set(loginUpdates, { merge: true });
-    }
+    let userData = userDoc.data() || {};
+    const reconciledAccount = await reconcileEmailAndLinkedProviders(req, response.data.localId, userRef, userData);
+    userInfo = reconciledAccount.authUser;
+    userData = reconciledAccount.userData;
 
     const idToken = response.data.idToken;
     const sessionCookie = await auth.createSessionCookie(idToken, { expiresIn: SESSION_MAX_AGE_MS });
@@ -926,12 +995,14 @@ exports.getSecurityOverview = catchAsync(async (req, res, next) => {
   const doc = await userRef.get();
   if (!doc.exists) return next(new AppError("Usuário não encontrado.", 404));
 
-  const userData = doc.data() || {};
+  let userData = doc.data() || {};
   let authProvider = userData.provider || "email";
   let linkedProviders = authProvider === "google" ? ["google"] : ["password"];
 
   try {
-    const authUser = await auth.getUser(uid);
+    const reconciledAccount = await reconcileEmailAndLinkedProviders(req, uid, userRef, userData);
+    const authUser = reconciledAccount.authUser;
+    userData = reconciledAccount.userData;
     const providers = authUser.providerData.map((provider) => provider.providerId);
     linkedProviders = providers
       .map((provider) => (provider === "google.com" ? "google" : provider))
@@ -1020,6 +1091,25 @@ exports.changePassword = catchAsync(async (req, res, next) => {
   res.status(200).json({ message: "Senha alterada com sucesso." });
 });
 
+exports.verifyCurrentPassword = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { currentPassword } = req.body;
+  const authUser = await auth.getUser(uid);
+  const providerIds = authUser.providerData.map((provider) => provider.providerId);
+
+  if (!providerIds.includes("password")) {
+    return next(new AppError("Esta conta não usa senha do CineSorte.", 400));
+  }
+
+  const passwordSession = await reauthenticateWithPassword(authUser.email, currentPassword);
+  if (passwordSession.localId !== uid) {
+    return next(new AppError("Senha atual incorreta.", 401));
+  }
+
+  setNoStore(res);
+  res.status(200).json({ message: "Senha confirmada." });
+});
+
 exports.requestEmailChange = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
   const { currentPassword } = req.body;
@@ -1040,11 +1130,14 @@ exports.requestEmailChange = catchAsync(async (req, res, next) => {
     return next(new AppError("Senha atual incorreta.", 401));
   }
 
-  await sendFirebaseEmailChangeVerification(passwordSession.idToken, newEmail);
+  const confirmationToken = crypto.randomBytes(32).toString("hex");
+  await sendFirebaseEmailChangeVerification(passwordSession.idToken, newEmail, confirmationToken);
   await db.collection("users").doc(uid).set(
     {
       pendingEmailChange: newEmail,
       emailChangeRequestedAt: new Date(),
+      emailChangeConfirmationToken: confirmationToken,
+      emailChangeConfirmationTokenExpiresAt: new Date(Date.now() + EMAIL_CHANGE_TOKEN_MAX_AGE_MS),
       updatedAt: new Date(),
     },
     { merge: true }
@@ -1058,7 +1151,78 @@ exports.requestEmailChange = catchAsync(async (req, res, next) => {
   });
 
   setNoStore(res);
-  res.status(200).json({ message: "Enviamos um link de confirmação para o novo email." });
+  res.status(200).json({
+    message: "Enviamos um link de confirmação para o novo email.",
+    confirmationToken,
+    pendingEmail: newEmail,
+  });
+});
+
+exports.confirmEmailChange = catchAsync(async (req, res, next) => {
+  const { token } = req.body;
+  const tokenSnapshot = await db
+    .collection("users")
+    .where("emailChangeConfirmationToken", "==", token)
+    .limit(1)
+    .get();
+
+  if (tokenSnapshot.empty) {
+    return next(new AppError("Link de alteração inválido ou expirado.", 400));
+  }
+
+  const userDoc = tokenSnapshot.docs[0];
+  const uid = userDoc.id;
+  const userRef = db.collection("users").doc(uid);
+  const userData = userDoc.data() || {};
+  const expiresAt = userData.emailChangeConfirmationTokenExpiresAt?.toDate
+    ? userData.emailChangeConfirmationTokenExpiresAt.toDate()
+    : new Date(userData.emailChangeConfirmationTokenExpiresAt || 0);
+
+  if (!expiresAt || Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() < Date.now()) {
+    await userRef.set(
+      {
+        emailChangeConfirmationToken: admin.firestore.FieldValue.delete(),
+        emailChangeConfirmationTokenExpiresAt: admin.firestore.FieldValue.delete(),
+      },
+      { merge: true }
+    );
+    return next(new AppError("Link de alteração expirado. Solicite a troca novamente.", 400));
+  }
+
+  const authUser = await auth.getUser(uid);
+  const pendingEmail = String(userData.pendingEmailChange || "").toLowerCase();
+  const authEmail = String(authUser.email || "").toLowerCase();
+
+  if (!pendingEmail || authEmail !== pendingEmail) {
+    return next(new AppError("Confirme o link recebido no novo email antes de continuar.", 409));
+  }
+
+  const reconciledAccount = await reconcileEmailAndLinkedProviders(req, uid, userRef, userData);
+  await userRef.set(
+    {
+      email: reconciledAccount.authUser.email || userData.pendingEmailChange,
+      pendingEmailChange: admin.firestore.FieldValue.delete(),
+      emailChangeRequestedAt: admin.firestore.FieldValue.delete(),
+      emailChangeConfirmationToken: admin.firestore.FieldValue.delete(),
+      emailChangeConfirmationTokenExpiresAt: admin.firestore.FieldValue.delete(),
+      emailConfirmedAt: new Date(),
+      updatedAt: new Date(),
+    },
+    { merge: true }
+  );
+
+  logAuthEvent(req, "email_change_confirmed", {
+    uid,
+    email: reconciledAccount.authUser.email || userData.pendingEmailChange,
+  });
+  await recordSecurityEvent(req, uid, "email_change_confirmed", {
+    provider: reconciledAccount.userData.provider || "email",
+    email: reconciledAccount.authUser.email || userData.pendingEmailChange,
+    username: userData.username || null,
+  });
+
+  setNoStore(res);
+  res.status(200).json({ message: "Email atualizado com sucesso." });
 });
 
 exports.linkGoogleAccount = catchAsync(async (req, res, next) => {

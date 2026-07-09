@@ -30,6 +30,14 @@ const changeEmailSchema = z.object({
   currentPassword: z.string().min(1),
 });
 
+const verifyCurrentPasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+});
+
+const confirmEmailChangeSchema = z.object({
+  token: z.string().min(32).max(128),
+});
+
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
   newPassword: z.string().min(6).regex(passwordRegex),
@@ -187,6 +195,8 @@ module.exports = {
   loginSchema,
   resendVerificationEmailSchema,
   changeEmailSchema,
+  verifyCurrentPasswordSchema,
+  confirmEmailChangeSchema,
   changePasswordSchema,
   linkGoogleSchema,
   linkPasswordSchema,
