@@ -1,6 +1,6 @@
 require("dotenv").config();
 
-const { resendPendingVerificationEmails } = require("../services/emailVerificationResendService");
+const { resendPendingVerificationEmails } = require("../modules/auth/emailVerification.service");
 
 const readArg = (name, fallback) => {
   const prefix = `--${name}=`;
