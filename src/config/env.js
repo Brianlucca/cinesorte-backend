@@ -5,6 +5,7 @@ const envSchema = z.object({
   PORT: z.string().default("3001"),
   FRONTEND_URL: z.string().url(),
   FIREBASE_WEB_API_KEY: z.string().min(1),
+  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
   FIREBASE_DATABASE_URL: z.string().url().optional(),
   MESSAGE_ENCRYPTION_SECRET: z.string().min(32).optional(),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),

@@ -39,6 +39,89 @@ const logAuthEvent = (req, event, details = {}) => {
   });
 };
 
+const parseUserAgent = (userAgent = "") => {
+  const browser = /Edg\//i.test(userAgent)
+    ? "Microsoft Edge"
+    : /Chrome\//i.test(userAgent)
+      ? "Google Chrome"
+      : /Firefox\//i.test(userAgent)
+        ? "Firefox"
+        : /Safari\//i.test(userAgent)
+          ? "Safari"
+          : "Navegador desconhecido";
+
+  const os = /Windows/i.test(userAgent)
+    ? "Windows"
+    : /Mac OS X|Macintosh/i.test(userAgent)
+      ? "macOS"
+      : /Android/i.test(userAgent)
+        ? "Android"
+        : /iPhone|iPad|iPod/i.test(userAgent)
+          ? "iOS"
+          : /Linux/i.test(userAgent)
+            ? "Linux"
+            : "Sistema desconhecido";
+
+  const device = /iPad|Tablet/i.test(userAgent)
+    ? "Tablet"
+    : /Mobile|Android|iPhone|iPod/i.test(userAgent)
+      ? "Celular"
+      : "Computador";
+
+  return { browser, os, device };
+};
+
+const getRequestSecurityContext = (req) => {
+  const userAgent = req.headers["user-agent"] || "unknown";
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const ip = Array.isArray(forwardedFor)
+    ? forwardedFor[0]
+    : forwardedFor?.split(",")[0]?.trim() || req.ip || "unknown";
+
+  return {
+    ip,
+    userAgent,
+    ...parseUserAgent(userAgent),
+  };
+};
+
+const recordSecurityEvent = async (req, uid, event, metadata = {}) => {
+  if (!uid) return;
+
+  try {
+    const userRef = db.collection("users").doc(uid);
+    if (typeof userRef.collection !== "function") return;
+
+    await userRef.collection("security_events").add({
+      event,
+      ...metadata,
+      ...getRequestSecurityContext(req),
+      createdAt: admin.firestore.Timestamp.now(),
+    });
+  } catch (error) {
+    logger.warn("security_event_record_failed", {
+      uid,
+      event,
+      message: error?.message || "unknown",
+    });
+  }
+};
+
+const formatSecurityEvent = (doc) => {
+  const data = doc.data() || {};
+  return {
+    id: doc.id,
+    event: data.event || "unknown",
+    provider: data.provider || null,
+    ip: data.ip || null,
+    browser: data.browser || "Navegador desconhecido",
+    os: data.os || "Sistema desconhecido",
+    device: data.device || "Dispositivo desconhecido",
+    userAgent: data.userAgent || null,
+    createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : data.createdAt || null,
+  };
+};
+
 const sendFirebasePasswordResetEmail = async (email) => {
   const response = await fetch(
     `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${env.FIREBASE_WEB_API_KEY}`,
@@ -104,6 +187,180 @@ const sendFirebaseVerificationEmailByUid = async (uid) => {
   return sendData;
 };
 
+const verifyGoogleIdentityToken = async (googleAccessToken) => {
+  if (!env.GOOGLE_CLIENT_ID) {
+    throw new AppError("Login com Google não configurado.", 500);
+  }
+
+  const tokenInfoResponse = await fetch(
+    `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(googleAccessToken)}`,
+    { signal: AbortSignal.timeout(10000) }
+  );
+  const tokenInfo = await tokenInfoResponse.json().catch(() => ({}));
+
+  if (!tokenInfoResponse.ok) {
+    throw new AppError(tokenInfo?.error_description || "Token do Google inválido.", 401);
+  }
+
+  const audience = tokenInfo.aud || tokenInfo.audience || tokenInfo.issued_to;
+  if (audience !== env.GOOGLE_CLIENT_ID) {
+    throw new AppError("Token do Google não pertence ao CineSorte.", 401);
+  }
+
+  const userInfoResponse = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+    headers: { Authorization: `Bearer ${googleAccessToken}` },
+    signal: AbortSignal.timeout(10000),
+  });
+  const userInfo = await userInfoResponse.json().catch(() => ({}));
+
+  if (!userInfoResponse.ok) {
+    throw new AppError(userInfo?.error_description || "Não foi possível validar o Google.", 401);
+  }
+
+  if (userInfo.email_verified !== "true" && userInfo.email_verified !== true) {
+    throw new AppError("Email do Google não verificado.", 401);
+  }
+
+  return {
+    googleSub: userInfo.sub || tokenInfo.user_id,
+    email: userInfo.email || tokenInfo.email,
+    name: userInfo.name,
+    picture: userInfo.picture,
+  };
+};
+
+const signInFirebaseWithGoogle = async (googleAccessToken) => {
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=${env.FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestUri: env.FRONTEND_URL,
+        postBody: `access_token=${encodeURIComponent(googleAccessToken)}&providerId=google.com`,
+        returnIdpCredential: true,
+        returnSecureToken: true,
+      }),
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.idToken || !data.localId) {
+    throw new Error(data?.error?.message || "firebase_google_sign_in_failed");
+  }
+
+  return data;
+};
+
+const linkFirebaseGoogleProvider = async (firebaseIdToken, googleAccessToken) => {
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=${env.FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        idToken: firebaseIdToken,
+        requestUri: env.FRONTEND_URL,
+        postBody: `access_token=${encodeURIComponent(googleAccessToken)}&providerId=google.com`,
+        returnIdpCredential: true,
+        returnSecureToken: true,
+      }),
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.idToken || !data.localId) {
+    const message = data?.error?.message || "firebase_google_link_failed";
+    if (message.includes("FEDERATED_USER_ID_ALREADY_LINKED")) {
+      throw new AppError("Esta conta Google já está vinculada a outro usuário.", 409);
+    }
+    if (message.includes("EMAIL_EXISTS")) {
+      throw new AppError("Este email Google já pertence a outra conta.", 409);
+    }
+    throw new Error(message);
+  }
+
+  return data;
+};
+
+const reauthenticateWithPassword = async (email, password) => {
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${env.FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, returnSecureToken: true }),
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.idToken || !data.localId) {
+    throw new AppError("Senha atual incorreta.", 401);
+  }
+
+  return data;
+};
+
+const updateFirebasePassword = async (idToken, newPassword, email = null) => {
+  const payload = { idToken, password: newPassword, returnSecureToken: true };
+  if (email) payload.email = email;
+
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:update?key=${env.FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.idToken) {
+    const message = data?.error?.message || "firebase_password_change_failed";
+    if (message.includes("WEAK_PASSWORD")) {
+      throw new AppError("A nova senha precisa ter pelo menos 6 caracteres.", 400);
+    }
+    throw new Error(message);
+  }
+
+  return data;
+};
+
+const sendFirebaseEmailChangeVerification = async (idToken, newEmail) => {
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${env.FIREBASE_WEB_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Firebase-Locale": "pt-BR" },
+      body: JSON.stringify({
+        requestType: "VERIFY_AND_CHANGE_EMAIL",
+        idToken,
+        newEmail,
+        continueUrl: `${env.FRONTEND_URL.replace(/\/$/, "")}/app/settings?tab=security`,
+      }),
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = data?.error?.message || "firebase_email_change_failed";
+    if (message.includes("EMAIL_EXISTS")) {
+      throw new AppError("Este email já está em uso.", 409);
+    }
+    if (message.includes("INVALID_ID_TOKEN")) {
+      throw new AppError("Faça login novamente para alterar o email.", 401);
+    }
+    throw new Error(message);
+  }
+
+  return data;
+};
+
 async function verifyTurnstile(token, ip) {
   if (!isProduction && token === "1x00000000000000000000AA") return true;
 
@@ -135,6 +392,14 @@ function generateUsername(displayName, uid) {
     .slice(0, 20);
   const suffix = uid.slice(-5).toLowerCase().replace(/[^a-z0-9]/g, "");
   return `${base || "user"}${suffix}`;
+}
+
+function normalizeUsername(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isValidUsername(value) {
+  return /^[a-z0-9_]{3,30}$/.test(value);
 }
 
 async function deleteCollectionData(collectionName, userId) {
@@ -315,6 +580,11 @@ exports.register = catchAsync(async (req, res, next) => {
   }
 
   logAuthEvent(req, "register_success", { uid: userRecord.uid, email, username: nickname });
+  await recordSecurityEvent(req, userRecord.uid, "register_success", {
+    provider: "email",
+    email,
+    username: nickname,
+  });
   setNoStore(res);
   res.status(201).json({ username: nickname, message: "Usuário criado. Verifique seu email." });
 });
@@ -340,8 +610,18 @@ exports.login = catchAsync(async (req, res, next) => {
     const userDoc = await userRef.get();
     const userData = userDoc.data() || {};
 
+    const loginUpdates = {};
+    if (userInfo.email && userInfo.email !== userData.email) {
+      loginUpdates.email = userInfo.email;
+      loginUpdates.pendingEmailChange = admin.firestore.FieldValue.delete();
+      loginUpdates.emailChangeRequestedAt = admin.firestore.FieldValue.delete();
+    }
     if (userInfo.emailVerified && !userData.emailConfirmedAt) {
-      await userRef.set({ emailConfirmedAt: new Date() }, { merge: true });
+      loginUpdates.emailConfirmedAt = new Date();
+    }
+
+    if (Object.keys(loginUpdates).length > 0) {
+      await userRef.set(loginUpdates, { merge: true });
     }
 
     const idToken = response.data.idToken;
@@ -353,6 +633,11 @@ exports.login = catchAsync(async (req, res, next) => {
     }
 
     logAuthEvent(req, "login_success", { uid: response.data.localId, email, username: userData.username || null });
+    await recordSecurityEvent(req, response.data.localId, "login_success", {
+      provider: userData.provider || "email",
+      email,
+      username: userData.username || null,
+    });
     setNoStore(res);
     res.status(200).json({
       uid: response.data.localId,
@@ -396,33 +681,84 @@ exports.resendVerificationEmail = catchAsync(async (req, res) => {
 });
 
 exports.googleAuth = catchAsync(async (req, res, next) => {
-  const { idToken } = req.body;
+  const { idToken, nickname, termsAccepted } = req.body;
   if (!idToken) return next(new AppError("Token do Google ausente.", 400));
 
-  let decoded;
+  let googleProfile;
   try {
-    decoded = await auth.verifyIdToken(idToken);
+    googleProfile = await verifyGoogleIdentityToken(idToken);
   } catch (error) {
     logAuthEvent(req, "google_auth_failed", { reason: error?.message || "invalid_google_token" });
+    if (error instanceof AppError) return next(error);
     return next(new AppError("Token do Google inválido.", 401));
   }
 
-  const { uid, email, name, picture } = decoded;
-  const userRef = db.collection("users").doc(uid);
-  const userDoc = await userRef.get();
-  let createdNow = false;
-  let userData;
+  const { googleSub, email, name, picture } = googleProfile;
+  if (!email) return next(new AppError("A conta Google não informou email.", 400));
 
-  if (!userDoc.exists) {
-    const baseUsername = generateUsername(name, uid);
-    const existing = await db.collection("users").where("username", "==", baseUsername).limit(1).get();
-    const finalUsername = existing.empty ? baseUsername : `${baseUsername}${Math.floor(Math.random() * 900 + 100)}`;
+  const existingByGoogleSub = await db
+    .collection("users")
+    .where("googleSub", "==", googleSub)
+    .limit(1)
+    .get();
+  const existingByEmail = existingByGoogleSub.empty
+    ? await db.collection("users").where("email", "==", email).limit(1).get()
+    : null;
+  const existingDoc = !existingByGoogleSub.empty
+    ? existingByGoogleSub.docs[0]
+    : existingByEmail && !existingByEmail.empty
+      ? existingByEmail.docs[0]
+      : null;
+
+  let uid = existingDoc?.id || null;
+  let userRef = uid ? db.collection("users").doc(uid) : null;
+  let createdNow = false;
+  let userData = existingDoc?.data() || null;
+  let firebaseGoogleSession = null;
+
+  if (!existingDoc) {
+    const requestedUsername = normalizeUsername(nickname);
+
+    if (!requestedUsername || termsAccepted !== true) {
+      const baseUsername = generateUsername(name, googleSub);
+      const existing = await db.collection("users").where("username", "==", baseUsername).limit(1).get();
+      const suggestedUsername = existing.empty ? baseUsername : `${baseUsername}${Math.floor(Math.random() * 900 + 100)}`;
+
+      logAuthEvent(req, "google_register_profile_required", { googleSub, email, provider: "google" });
+      setNoStore(res);
+      return res.status(200).json({
+        requiresProfile: true,
+        provider: "google",
+        email: email || null,
+        name: name || "Usuário",
+        photoURL: picture || null,
+        suggestedUsername,
+      });
+    }
+
+    if (!isValidUsername(requestedUsername)) {
+      return next(new AppError("Username inválido. Use letras minúsculas, números ou _.", 400));
+    }
+
+    if (containsProfanity(requestedUsername)) {
+      return next(new AppError("O username contém conteúdo impróprio. Revise esse campo.", 400));
+    }
+
+    const existing = await db.collection("users").where("username", "==", requestedUsername).limit(1).get();
+    if (!existing.empty) {
+      return next(new AppError("Este username já está em uso.", 400));
+    }
+
+    firebaseGoogleSession = await signInFirebaseWithGoogle(idToken);
+    uid = firebaseGoogleSession.localId;
+    userRef = db.collection("users").doc(uid);
 
     userData = {
       name: name || "Usuário",
-      username: finalUsername,
+      username: requestedUsername,
       email: email || null,
       provider: "google",
+      googleSub,
       createdAt: new Date(),
       role: "user",
       levelTitle: "Espectador",
@@ -443,18 +779,29 @@ exports.googleAuth = catchAsync(async (req, res, next) => {
       watchedCount: 0,
       likesCount: 0,
       likedMediaIds: [],
+      emailConfirmedAt: new Date(),
     };
 
     await userRef.set(userData);
     createdNow = true;
   } else {
-    userData = userDoc.data() || {};
+    firebaseGoogleSession = await signInFirebaseWithGoogle(idToken);
+    uid = firebaseGoogleSession.localId;
+
+    if (existingDoc.id !== uid) {
+      userRef = db.collection("users").doc(uid);
+      const currentDoc = await userRef.get();
+      if (!currentDoc.exists) {
+        await userRef.set(userData);
+      } else {
+        userData = currentDoc.data() || userData;
+      }
+    }
+
     const updates = {};
 
     if (picture && !userData.photoURL) updates.photoURL = picture;
-    if (!userData.termsVersion) updates.termsVersion = CURRENT_TERMS_VERSION;
-    if (!userData.termsAcceptedAt) updates.termsAcceptedAt = new Date();
-    if (!userData.termsAcceptedUserAgent) updates.termsAcceptedUserAgent = req.headers["user-agent"] || "unknown";
+    if (!userData.googleSub) updates.googleSub = googleSub;
 
     if (Object.keys(updates).length > 0) {
       await userRef.update(updates);
@@ -462,17 +809,38 @@ exports.googleAuth = catchAsync(async (req, res, next) => {
     }
   }
 
-  const sessionCookie = await auth.createSessionCookie(idToken, { expiresIn: SESSION_MAX_AGE_MS });
+  uid = firebaseGoogleSession.localId;
+  const sessionCookie = await auth.createSessionCookie(firebaseGoogleSession.idToken, { expiresIn: SESSION_MAX_AGE_MS });
   res.cookie(AUTH_COOKIE_NAME, sessionCookie, sessionCookieOptions);
   if (AUTH_COOKIE_NAME !== LEGACY_AUTH_COOKIE_NAME) {
     res.clearCookie(LEGACY_AUTH_COOKIE_NAME, sessionCookieOptions);
   }
 
-  if (createdNow && email) {
-    await userRef.set({ emailConfirmedAt: new Date() }, { merge: true });
+  if (createdNow) {
+    logAuthEvent(req, "register_success", {
+      uid,
+      email,
+      username: userData.username,
+      provider: "google",
+    });
+    await recordSecurityEvent(req, uid, "register_success", {
+      provider: "google",
+      email,
+      username: userData.username,
+    });
   }
 
-  logAuthEvent(req, "google_auth_success", { uid, email, username: userData.username });
+  logAuthEvent(req, "login_success", {
+    uid,
+    email,
+    username: userData.username,
+    provider: "google",
+  });
+  await recordSecurityEvent(req, uid, "login_success", {
+    provider: "google",
+    email,
+    username: userData.username,
+  });
   setNoStore(res);
   res.status(200).json({
     uid,
@@ -488,8 +856,25 @@ exports.logout = catchAsync(async (req, res) => {
   if (sessionCookie) {
     try {
       const decodedClaims = await auth.verifySessionCookie(sessionCookie, false);
+      let userData = {};
+
+      try {
+        const userDoc = await db.collection("users").doc(decodedClaims.uid).get();
+        userData = userDoc.exists ? userDoc.data() || {} : {};
+      } catch {}
+
       await auth.revokeRefreshTokens(decodedClaims.uid);
-      logAuthEvent(req, "logout", { uid: decodedClaims.uid, email: decodedClaims.email || null });
+      logAuthEvent(req, "logout", {
+        uid: decodedClaims.uid,
+        email: decodedClaims.email || userData.email || null,
+        username: userData.username || null,
+        provider: userData.provider || null,
+      });
+      await recordSecurityEvent(req, decodedClaims.uid, "logout", {
+        provider: userData.provider || null,
+        email: decodedClaims.email || userData.email || null,
+        username: userData.username || null,
+      });
     } catch {}
   }
 
@@ -522,8 +907,277 @@ exports.getMe = catchAsync(async (req, res, next) => {
     followersCount: d.followersCount,
     followingCount: d.followingCount,
     genreCounts: d.genreCounts || {},
+    provider: d.provider || "email",
     termsVersion: d.termsVersion,
   });
+});
+
+exports.getSecurityOverview = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const requestedLimit = Number.parseInt(req.query.limit, 10);
+  const pageSize = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 20) : 8;
+  const cursorDate = req.query.cursor ? new Date(req.query.cursor) : null;
+
+  if (req.query.cursor && Number.isNaN(cursorDate.getTime())) {
+    return next(new AppError("Cursor de atividades inválido.", 400));
+  }
+
+  const userRef = db.collection("users").doc(uid);
+  const doc = await userRef.get();
+  if (!doc.exists) return next(new AppError("Usuário não encontrado.", 404));
+
+  const userData = doc.data() || {};
+  let authProvider = userData.provider || "email";
+  let linkedProviders = authProvider === "google" ? ["google"] : ["password"];
+
+  try {
+    const authUser = await auth.getUser(uid);
+    const providers = authUser.providerData.map((provider) => provider.providerId);
+    linkedProviders = providers
+      .map((provider) => (provider === "google.com" ? "google" : provider))
+      .filter((provider) => provider === "google" || provider === "password");
+    if (providers.includes("google.com") && providers.includes("password")) authProvider = "email_google";
+    else if (providers.includes("google.com")) authProvider = "google";
+    else if (providers.includes("password")) authProvider = "email";
+  } catch {}
+
+  let activitiesQuery = userRef
+    .collection("security_events")
+    .orderBy("createdAt", "desc")
+    .limit(pageSize + 1);
+
+  if (cursorDate) {
+    activitiesQuery = activitiesQuery.startAfter(admin.firestore.Timestamp.fromDate(cursorDate));
+  }
+
+  const activitySnapshot = await activitiesQuery.get();
+  const activityDocs = activitySnapshot.docs.slice(0, pageSize);
+  const hasMoreActivities = activitySnapshot.docs.length > pageSize;
+  const lastActivity = activityDocs[activityDocs.length - 1];
+  const lastActivityData = lastActivity?.data() || null;
+  const nextActivitiesCursor =
+    hasMoreActivities && lastActivityData?.createdAt?.toDate
+      ? lastActivityData.createdAt.toDate().toISOString()
+      : null;
+
+  setNoStore(res);
+  res.status(200).json({
+    account: {
+      provider: authProvider,
+      providers: linkedProviders,
+      label:
+        authProvider === "email_google"
+          ? "Email e Google"
+          : authProvider === "google"
+            ? "Google"
+            : "Email e senha",
+      email: userData.email || null,
+      pendingEmailChange: userData.pendingEmailChange || null,
+      emailConfirmedAt: userData.emailConfirmedAt?.toDate
+        ? userData.emailConfirmedAt.toDate().toISOString()
+        : userData.emailConfirmedAt || null,
+    },
+    currentSession: {
+      ...getRequestSecurityContext(req),
+      authTime: req.user.authTime ? new Date(req.user.authTime).toISOString() : null,
+    },
+    activities: activityDocs.map(formatSecurityEvent),
+    nextActivitiesCursor,
+  });
+});
+
+exports.changePassword = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { currentPassword, newPassword } = req.body;
+  const authUser = await auth.getUser(uid);
+  const providerIds = authUser.providerData.map((provider) => provider.providerId);
+
+  if (!providerIds.includes("password")) {
+    return next(new AppError("Esta conta não usa senha do CineSorte.", 400));
+  }
+
+  const passwordSession = await reauthenticateWithPassword(authUser.email, currentPassword);
+  if (passwordSession.localId !== uid) {
+    return next(new AppError("Senha atual incorreta.", 401));
+  }
+
+  const updatedSession = await updateFirebasePassword(passwordSession.idToken, newPassword);
+  const sessionCookie = await auth.createSessionCookie(updatedSession.idToken, { expiresIn: SESSION_MAX_AGE_MS });
+
+  res.cookie(AUTH_COOKIE_NAME, sessionCookie, sessionCookieOptions);
+  if (AUTH_COOKIE_NAME !== LEGACY_AUTH_COOKIE_NAME) {
+    res.clearCookie(LEGACY_AUTH_COOKIE_NAME, sessionCookieOptions);
+  }
+
+  logAuthEvent(req, "password_changed", { uid, email: authUser.email || null });
+  await recordSecurityEvent(req, uid, "password_changed", {
+    provider: providerIds.includes("google.com") ? "email_google" : "email",
+    email: authUser.email || null,
+    username: req.user.username || null,
+  });
+
+  setNoStore(res);
+  res.status(200).json({ message: "Senha alterada com sucesso." });
+});
+
+exports.requestEmailChange = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { currentPassword } = req.body;
+  const newEmail = String(req.body.newEmail || "").trim().toLowerCase();
+  const authUser = await auth.getUser(uid);
+  const providerIds = authUser.providerData.map((provider) => provider.providerId);
+
+  if (!providerIds.includes("password")) {
+    return next(new AppError("Contas Google não alteram email pelo CineSorte.", 400));
+  }
+
+  if (newEmail === String(authUser.email || "").toLowerCase()) {
+    return next(new AppError("Informe um email diferente do atual.", 400));
+  }
+
+  const passwordSession = await reauthenticateWithPassword(authUser.email, currentPassword);
+  if (passwordSession.localId !== uid) {
+    return next(new AppError("Senha atual incorreta.", 401));
+  }
+
+  await sendFirebaseEmailChangeVerification(passwordSession.idToken, newEmail);
+  await db.collection("users").doc(uid).set(
+    {
+      pendingEmailChange: newEmail,
+      emailChangeRequestedAt: new Date(),
+      updatedAt: new Date(),
+    },
+    { merge: true }
+  );
+
+  logAuthEvent(req, "email_change_requested", { uid, email: authUser.email || null, newEmail });
+  await recordSecurityEvent(req, uid, "email_change_requested", {
+    provider: providerIds.includes("google.com") ? "email_google" : "email",
+    email: authUser.email || null,
+    username: req.user.username || null,
+  });
+
+  setNoStore(res);
+  res.status(200).json({ message: "Enviamos um link de confirmação para o novo email." });
+});
+
+exports.linkGoogleAccount = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { idToken, currentPassword } = req.body;
+  const authUser = await auth.getUser(uid);
+  const providerIds = authUser.providerData.map((provider) => provider.providerId);
+
+  if (!providerIds.includes("password")) {
+    return next(new AppError("Esta ação está disponível apenas para contas com email e senha.", 400));
+  }
+
+  if (providerIds.includes("google.com")) {
+    return next(new AppError("Google já está vinculado a esta conta.", 400));
+  }
+
+  const googleProfile = await verifyGoogleIdentityToken(idToken);
+  if (String(googleProfile.email || "").toLowerCase() !== String(authUser.email || "").toLowerCase()) {
+    return next(new AppError("Use a conta Google com o mesmo email cadastrado no CineSorte.", 400));
+  }
+
+  const passwordSession = await reauthenticateWithPassword(authUser.email, currentPassword);
+  if (passwordSession.localId !== uid) {
+    return next(new AppError("Senha atual incorreta.", 401));
+  }
+
+  const linkedSession = await linkFirebaseGoogleProvider(passwordSession.idToken, idToken);
+  if (linkedSession.localId !== uid) {
+    return next(new AppError("Não foi possível vincular este Google à conta atual.", 409));
+  }
+
+  await db.collection("users").doc(uid).set(
+    {
+      googleSub: googleProfile.googleSub,
+      googleLinkedAt: new Date(),
+      provider: "email_google",
+      photoURL: req.user.photoURL || googleProfile.picture || null,
+      updatedAt: new Date(),
+    },
+    { merge: true }
+  );
+
+  const sessionCookie = await auth.createSessionCookie(linkedSession.idToken, { expiresIn: SESSION_MAX_AGE_MS });
+  res.cookie(AUTH_COOKIE_NAME, sessionCookie, sessionCookieOptions);
+  if (AUTH_COOKIE_NAME !== LEGACY_AUTH_COOKIE_NAME) {
+    res.clearCookie(LEGACY_AUTH_COOKIE_NAME, sessionCookieOptions);
+  }
+
+  logAuthEvent(req, "google_linked", { uid, email: authUser.email || null });
+  await recordSecurityEvent(req, uid, "google_linked", {
+    provider: "email_google",
+    email: authUser.email || null,
+    username: req.user.username || null,
+  });
+
+  setNoStore(res);
+  res.status(200).json({ message: "Google vinculado com sucesso." });
+});
+
+exports.linkPasswordAccount = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { idToken, newPassword } = req.body;
+  const authUser = await auth.getUser(uid);
+  const providerIds = authUser.providerData.map((provider) => provider.providerId);
+
+  if (!providerIds.includes("google.com")) {
+    return next(new AppError("Esta ação está disponível apenas para contas Google.", 400));
+  }
+
+  if (providerIds.includes("password")) {
+    return next(new AppError("Email e senha já estão vinculados a esta conta.", 400));
+  }
+
+  const googleProfile = await verifyGoogleIdentityToken(idToken);
+  if (String(googleProfile.email || "").toLowerCase() !== String(authUser.email || "").toLowerCase()) {
+    return next(new AppError("Use a conta Google com o mesmo email cadastrado no CineSorte.", 400));
+  }
+
+  const userRef = db.collection("users").doc(uid);
+  const userDoc = await userRef.get();
+  const userData = userDoc.exists ? userDoc.data() || {} : {};
+
+  if (userData.googleSub && userData.googleSub !== googleProfile.googleSub) {
+    return next(new AppError("Esta conta Google não corresponde ao usuário atual.", 400));
+  }
+
+  try {
+    await auth.updateUser(uid, {
+      email: authUser.email,
+      password: newPassword,
+      emailVerified: true,
+    });
+  } catch (error) {
+    if (error?.code === "auth/weak-password") {
+      return next(new AppError("A nova senha precisa ter pelo menos 6 caracteres.", 400));
+    }
+    throw error;
+  }
+
+  await userRef.set(
+    {
+      provider: "email_google",
+      googleSub: userData.googleSub || googleProfile.googleSub,
+      passwordLinkedAt: new Date(),
+      emailConfirmedAt: userData.emailConfirmedAt || new Date(),
+      updatedAt: new Date(),
+    },
+    { merge: true }
+  );
+
+  logAuthEvent(req, "password_linked", { uid, email: authUser.email || null });
+  await recordSecurityEvent(req, uid, "password_linked", {
+    provider: "email_google",
+    email: authUser.email || null,
+    username: req.user.username || null,
+  });
+
+  setNoStore(res);
+  res.status(200).json({ message: "Email e senha vinculados com sucesso." });
 });
 
 exports.updateProfile = catchAsync(async (req, res, next) => {

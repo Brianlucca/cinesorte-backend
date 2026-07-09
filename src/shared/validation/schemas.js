@@ -25,6 +25,26 @@ const resendVerificationEmailSchema = z.object({
   email: z.string().email(),
 });
 
+const changeEmailSchema = z.object({
+  newEmail: z.string().email(),
+  currentPassword: z.string().min(1),
+});
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(6).regex(passwordRegex),
+});
+
+const linkGoogleSchema = z.object({
+  idToken: z.string().min(1),
+  currentPassword: z.string().min(1),
+});
+
+const linkPasswordSchema = z.object({
+  idToken: z.string().min(1),
+  newPassword: z.string().min(6).regex(passwordRegex),
+});
+
 const accountDeletionTokenSchema = z.object({
   token: z.string().min(40).max(256),
 });
@@ -166,6 +186,10 @@ module.exports = {
   registerSchema,
   loginSchema,
   resendVerificationEmailSchema,
+  changeEmailSchema,
+  changePasswordSchema,
+  linkGoogleSchema,
+  linkPasswordSchema,
   accountDeletionTokenSchema,
   profileSchema,
   interactionSchema,

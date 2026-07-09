@@ -38,6 +38,7 @@ const verifyToken = catchAsync(async (req, res, next) => {
       authTime: decodedClaims.auth_time ? decodedClaims.auth_time * 1000 : null,
       username: userData.username,
       photoURL: userData.photoURL,
+      provider: userData.provider || 'email',
       role: userData.role,
       termsVersion: userData.termsVersion,
     };

@@ -9,6 +9,10 @@ const {
   registerSchema,
   loginSchema,
   resendVerificationEmailSchema,
+  changeEmailSchema,
+  changePasswordSchema,
+  linkGoogleSchema,
+  linkPasswordSchema,
   profileSchema,
   supportTicketSchema,
 } = require("../../shared/validation/schemas");
@@ -24,6 +28,11 @@ router.post(
 router.post('/auth/google', authLimiter, authController.googleAuth);
 router.post('/logout', authController.logout);
 router.get('/me', verifyToken, authController.getMe);
+router.get('/security', verifyToken, authController.getSecurityOverview);
+router.post('/security/change-email', verifyToken, validate(changeEmailSchema), authController.requestEmailChange);
+router.post('/security/change-password', verifyToken, validate(changePasswordSchema), authController.changePassword);
+router.post('/security/link-google', verifyToken, validate(linkGoogleSchema), authController.linkGoogleAccount);
+router.post('/security/link-password', verifyToken, validate(linkPasswordSchema), authController.linkPasswordAccount);
 router.put('/me', verifyToken, validate(profileSchema), authController.updateProfile);
 router.post('/me/delete-request', verifyToken, authController.requestAccountDeletion);
 router.delete('/me', verifyToken, authController.deleteAccount);

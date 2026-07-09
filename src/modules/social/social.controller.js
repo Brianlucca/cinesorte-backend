@@ -13,6 +13,67 @@ async function getUidByUsername(username) {
   return snapshot.docs[0].id;
 }
 
+async function resolveUserId(handle) {
+  if (!handle) throw new AppError("Usuário não especificado.", 400);
+
+  const directDoc = await db.collection("users").doc(handle).get();
+  if (directDoc.exists) return handle;
+
+  return getUidByUsername(handle);
+}
+
+function normalizeSocialListCursor(cursor) {
+  if (!cursor) return null;
+  const date = new Date(Number(cursor));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function getUserSocialList({ userId, collectionName, paged }) {
+  const targetUid = await resolveUserId(userId);
+  const limit = Math.min(Number(paged?.limit) || 50, 50);
+  let query = db
+    .collection("users")
+    .doc(targetUid)
+    .collection(collectionName)
+    .orderBy("since", "desc")
+    .limit(limit);
+
+  const cursorDate = normalizeSocialListCursor(paged?.cursor);
+  if (cursorDate) query = query.startAfter(cursorDate);
+
+  const snapshot = await query.get();
+  if (snapshot.empty) {
+    return paged ? { items: [], hasMore: false, nextCursor: null } : [];
+  }
+
+  const userRefs = snapshot.docs.map((doc) => db.collection("users").doc(doc.id));
+  const usersDocs = await db.getAll(...userRefs);
+
+  const items = usersDocs
+    .filter((doc) => doc.exists)
+    .map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        name: data.name || null,
+        username: data.username,
+        userPhoto: data.photoURL || null,
+        photoURL: data.photoURL || null,
+        levelTitle: data.levelTitle || null,
+      };
+    });
+
+  if (!paged) return items;
+
+  const lastDoc = snapshot.docs[snapshot.docs.length - 1];
+  const lastSince = lastDoc?.data()?.since;
+  return {
+    items,
+    hasMore: snapshot.docs.length === limit,
+    nextCursor: lastSince ? lastSince.toDate?.().getTime?.() || new Date(lastSince).getTime() : null,
+  };
+}
+
 async function getLikedMediaIdsForUser(userId) {
   const userDoc = await db.collection("users").doc(userId).get();
   if (!userDoc.exists) return [];
@@ -189,66 +250,34 @@ exports.getMatchPercentage = catchAsync(async (req, res, next) => {
 
 exports.getUserFollowersList = catchAsync(async (req, res, next) => {
   const { userId } = req.params;
-  let targetUid = userId;
+  const wantsPaged = req.query.paged === "true";
 
-  if (userId.length < 20) {
-    try {
-      targetUid = await getUidByUsername(userId);
-    } catch (e) {
-      return res.status(200).json([]);
-    }
+  try {
+    const result = await getUserSocialList({
+      userId,
+      collectionName: "followers",
+      paged: wantsPaged ? { cursor: req.query.cursor, limit: req.query.limit } : null,
+    });
+    res.status(200).json(result);
+  } catch {
+    res.status(200).json(wantsPaged ? { items: [], hasMore: false, nextCursor: null } : []);
   }
-
-  const snapshot = await db.collection("users").doc(targetUid).collection("followers").limit(50).get();
-  if (snapshot.empty) return res.status(200).json([]);
-
-  const userRefs = snapshot.docs.map((doc) => db.collection("users").doc(doc.id));
-  const usersDocs = await db.getAll(...userRefs);
-
-  res.status(200).json(
-    usersDocs
-      .filter((doc) => doc.exists)
-      .map((doc) => {
-        const data = doc.data();
-        return {
-          username: data.username,
-          userPhoto: data.photoURL || null,
-          levelTitle: data.levelTitle || null,
-        };
-      })
-  );
 });
 
 exports.getUserFollowingList = catchAsync(async (req, res, next) => {
   const { userId } = req.params;
-  let targetUid = userId;
+  const wantsPaged = req.query.paged === "true";
 
-  if (userId.length < 20) {
-    try {
-      targetUid = await getUidByUsername(userId);
-    } catch (e) {
-      return res.status(200).json([]);
-    }
+  try {
+    const result = await getUserSocialList({
+      userId,
+      collectionName: "following",
+      paged: wantsPaged ? { cursor: req.query.cursor, limit: req.query.limit } : null,
+    });
+    res.status(200).json(result);
+  } catch {
+    res.status(200).json(wantsPaged ? { items: [], hasMore: false, nextCursor: null } : []);
   }
-
-  const snapshot = await db.collection("users").doc(targetUid).collection("following").limit(50).get();
-  if (snapshot.empty) return res.status(200).json([]);
-
-  const userRefs = snapshot.docs.map((doc) => db.collection("users").doc(doc.id));
-  const usersDocs = await db.getAll(...userRefs);
-
-  res.status(200).json(
-    usersDocs
-      .filter((doc) => doc.exists)
-      .map((doc) => {
-        const data = doc.data();
-        return {
-          username: data.username,
-          userPhoto: data.photoURL || null,
-          levelTitle: data.levelTitle || null,
-        };
-      })
-  );
 });
 
 exports.getSuggestions = catchAsync(async (req, res, next) => {
