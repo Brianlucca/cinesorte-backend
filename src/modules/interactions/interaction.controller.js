@@ -6,6 +6,23 @@ const catchAsync = require("../../shared/utils/catchAsync");
 const AppError = require("../../shared/errors/AppError");
 const { deleteByPrefix } = require("../../shared/cache/cache.service");
 
+function serializeInteraction(data = {}) {
+  return {
+    mediaId: data.mediaId || null,
+    mediaType: data.mediaType || null,
+    mediaTitle: data.mediaTitle || null,
+    posterPath: data.posterPath || null,
+    backdropPath: data.backdropPath || null,
+    liked: Boolean(data.liked),
+    disliked: Boolean(data.disliked),
+    watched: Boolean(data.watched),
+    watchedAt: data.watchedAt || null,
+    likedAt: data.likedAt || null,
+    timestamp: data.timestamp || null,
+    lastInteraction: data.lastInteraction || null,
+  };
+}
+
 exports.recordInteraction = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
   const { mediaId, mediaType, action, mediaTitle } = req.body;
@@ -154,7 +171,7 @@ exports.getUserInteractions = catchAsync(async (req, res, next) => {
     .collection("interactions")
     .where("userId", "==", uid)
     .get();
-  res.status(200).json(snapshot.docs.map((doc) => doc.data()));
+  res.status(200).json(snapshot.docs.map((doc) => serializeInteraction(doc.data())));
 });
 
 exports.getWatchDiary = catchAsync(async (req, res, next) => {
@@ -179,7 +196,7 @@ exports.getWatchDiary = catchAsync(async (req, res, next) => {
     const data = doc.data();
     const month = data.watchedAt.toDate().getMonth();
     if (!diary[month]) diary[month] = [];
-    diary[month].push(data);
+    diary[month].push(serializeInteraction(data));
   });
 
   res.status(200).json(diary);

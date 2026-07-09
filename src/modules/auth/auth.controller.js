@@ -23,6 +23,8 @@ const CURRENT_TERMS_VERSION = "4.0";
 const ACCOUNT_DELETION_REQUESTS = "account_deletion_requests";
 const RECENT_LOGIN_MAX_AGE_MS = 5 * 60 * 1000;
 const EMAIL_CHANGE_TOKEN_MAX_AGE_MS = 60 * 60 * 1000;
+const EMAIL_CHANGE_UNAVAILABLE_MESSAGE =
+  "Não foi possível concluir a solicitação para este email.";
 
 const setNoStore = (res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
@@ -108,6 +110,19 @@ const recordSecurityEvent = async (req, uid, event, metadata = {}) => {
     });
   }
 };
+
+async function clearPendingEmailChange(uid) {
+  await db.collection("users").doc(uid).set(
+    {
+      pendingEmailChange: admin.firestore.FieldValue.delete(),
+      emailChangeRequestedAt: admin.firestore.FieldValue.delete(),
+      emailChangeConfirmationToken: admin.firestore.FieldValue.delete(),
+      emailChangeConfirmationTokenExpiresAt: admin.firestore.FieldValue.delete(),
+      updatedAt: new Date(),
+    },
+    { merge: true }
+  );
+}
 
 const formatSecurityEvent = (doc) => {
   const data = doc.data() || {};
@@ -430,7 +445,7 @@ const sendFirebaseEmailChangeVerification = async (idToken, newEmail, confirmati
   if (!response.ok) {
     const message = data?.error?.message || "firebase_email_change_failed";
     if (message.includes("EMAIL_EXISTS")) {
-      throw new AppError("Este email já está em uso.", 409);
+      throw new AppError(EMAIL_CHANGE_UNAVAILABLE_MESSAGE, 400);
     }
     if (message.includes("INVALID_ID_TOKEN")) {
       throw new AppError("Faça login novamente para alterar o email.", 401);
@@ -1131,7 +1146,14 @@ exports.requestEmailChange = catchAsync(async (req, res, next) => {
   }
 
   const confirmationToken = crypto.randomBytes(32).toString("hex");
-  await sendFirebaseEmailChangeVerification(passwordSession.idToken, newEmail, confirmationToken);
+  try {
+    await sendFirebaseEmailChangeVerification(passwordSession.idToken, newEmail, confirmationToken);
+  } catch (error) {
+    if (error instanceof AppError && error.message === EMAIL_CHANGE_UNAVAILABLE_MESSAGE) {
+      await clearPendingEmailChange(uid);
+    }
+    throw error;
+  }
   await db.collection("users").doc(uid).set(
     {
       pendingEmailChange: newEmail,

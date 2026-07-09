@@ -13,11 +13,11 @@ async function getUidByUsername(username) {
   return snapshot.docs[0].id;
 }
 
-async function resolveUserId(handle) {
+async function resolveUserId(handle, requesterUid = null) {
   if (!handle) throw new AppError("Usuário não especificado.", 400);
 
   const directDoc = await db.collection("users").doc(handle).get();
-  if (directDoc.exists) return handle;
+  if (directDoc.exists && handle === requesterUid) return handle;
 
   return getUidByUsername(handle);
 }
@@ -28,8 +28,23 @@ function normalizeSocialListCursor(cursor) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-async function getUserSocialList({ userId, collectionName, paged }) {
-  const targetUid = await resolveUserId(userId);
+function serializePublicSocialUser(data = {}) {
+  const username = data.username || null;
+
+  return {
+    id: username,
+    publicId: username,
+    profilePath: username ? `/app/profile/${username}` : null,
+    name: data.name || null,
+    username,
+    userPhoto: data.photoURL || null,
+    photoURL: data.photoURL || null,
+    levelTitle: data.levelTitle || null,
+  };
+}
+
+async function getUserSocialList({ userId, collectionName, paged, requesterUid }) {
+  const targetUid = await resolveUserId(userId, requesterUid);
   const limit = Math.min(Number(paged?.limit) || 50, 50);
   let query = db
     .collection("users")
@@ -51,17 +66,7 @@ async function getUserSocialList({ userId, collectionName, paged }) {
 
   const items = usersDocs
     .filter((doc) => doc.exists)
-    .map((doc) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        name: data.name || null,
-        username: data.username,
-        userPhoto: data.photoURL || null,
-        photoURL: data.photoURL || null,
-        levelTitle: data.levelTitle || null,
-      };
-    });
+    .map((doc) => serializePublicSocialUser(doc.data()));
 
   if (!paged) return items;
 
@@ -250,12 +255,14 @@ exports.getMatchPercentage = catchAsync(async (req, res, next) => {
 
 exports.getUserFollowersList = catchAsync(async (req, res, next) => {
   const { userId } = req.params;
+  const { uid } = req.user;
   const wantsPaged = req.query.paged === "true";
 
   try {
     const result = await getUserSocialList({
       userId,
       collectionName: "followers",
+      requesterUid: uid,
       paged: wantsPaged ? { cursor: req.query.cursor, limit: req.query.limit } : null,
     });
     res.status(200).json(result);
@@ -266,12 +273,14 @@ exports.getUserFollowersList = catchAsync(async (req, res, next) => {
 
 exports.getUserFollowingList = catchAsync(async (req, res, next) => {
   const { userId } = req.params;
+  const { uid } = req.user;
   const wantsPaged = req.query.paged === "true";
 
   try {
     const result = await getUserSocialList({
       userId,
       collectionName: "following",
+      requesterUid: uid,
       paged: wantsPaged ? { cursor: req.query.cursor, limit: req.query.limit } : null,
     });
     res.status(200).json(result);
