@@ -5,6 +5,7 @@ const {
   CONVERSATIONS_PATH,
   DIRECT_PAIRS_PATH,
   GROUPS_BY_OWNER_PATH,
+  HIDDEN_GROUPS_BY_USER_PATH,
   LEGACY_PATHS,
   MESSAGES_PATH,
   USER_CONVERSATIONS_PATH,
@@ -454,6 +455,13 @@ async function deleteConversationForUser(uid, conversationId) {
 
   if (conversation.type === "direct") {
     updates[`${conversationBasePath}/memberMeta/${uid}/clearedAt`] = now;
+  } else if (conversation.type === "group") {
+    updates[`${HIDDEN_GROUPS_BY_USER_PATH}/${uid}/${conversationId}`] = {
+      conversationId,
+      name: conversation.name || "Grupo",
+      hiddenAt: now,
+      updatedAt: conversation.updatedAt || now,
+    };
   }
 
   await rtdb.ref().update(updates);
@@ -476,6 +484,7 @@ async function restoreConversationForUser(uid, conversationId) {
   await rtdb.ref().update({
     [`${userIndexBasePath}/${uid}/${conversationId}`]: userIndex,
     [`${conversationBasePath}/memberMeta/${uid}/hiddenAt`]: null,
+    [`${HIDDEN_GROUPS_BY_USER_PATH}/${uid}/${conversationId}`]: null,
   });
 
   const profiles = await getUsersByIds(Object.keys(conversation.members || {}));
@@ -487,6 +496,8 @@ async function listHiddenOwnedGroups(uid) {
     getUserConversationIndex(uid),
     rtdb.ref(`${GROUPS_BY_OWNER_PATH}/${uid}`).get(),
   ]);
+  const hiddenIndexSnapshot = await rtdb.ref(`${HIDDEN_GROUPS_BY_USER_PATH}/${uid}`).get();
+  let hiddenGroupIds = Object.keys(hiddenIndexSnapshot.val() || {});
   let ownedGroupIds = Object.keys(ownerIndexSnapshot.val() || {});
 
   if (ownedGroupIds.length === 0) {
@@ -510,20 +521,58 @@ async function listHiddenOwnedGroups(uid) {
     }
   }
 
-  if (ownedGroupIds.length === 0) return [];
+  if (hiddenGroupIds.length === 0) {
+    const [currentConversationsSnapshot, legacyConversationsSnapshot] = await Promise.all([
+      rtdb.ref(CONVERSATIONS_PATH).get(),
+      rtdb.ref(LEGACY_PATHS.conversations).get(),
+    ]);
+    const hiddenIndexUpdates = {};
+    const discovered = [
+      ...Object.entries(currentConversationsSnapshot.val() || {}),
+      ...Object.entries(legacyConversationsSnapshot.val() || {}),
+    ]
+      .filter(([conversationId, conversation]) => (
+        conversation.type === "group" &&
+        conversation.members?.[uid] &&
+        conversation.memberMeta?.[uid]?.hiddenAt &&
+        !index[conversationId]
+      ))
+      .map(([conversationId, conversation]) => {
+        hiddenIndexUpdates[`${HIDDEN_GROUPS_BY_USER_PATH}/${uid}/${conversationId}`] = {
+          conversationId,
+          name: conversation.name || "Grupo",
+          hiddenAt: conversation.memberMeta?.[uid]?.hiddenAt || Date.now(),
+          updatedAt: conversation.updatedAt || conversation.createdAt || Date.now(),
+        };
+        return conversationId;
+      });
+
+    if (Object.keys(hiddenIndexUpdates).length > 0) {
+      await rtdb.ref().update(hiddenIndexUpdates);
+    }
+
+    hiddenGroupIds = discovered;
+  }
+
+  const candidateGroupIds = [...new Set([...hiddenGroupIds, ...ownedGroupIds])];
+  if (candidateGroupIds.length === 0) return [];
 
   const conversationSnapshots = await Promise.all(
-    ownedGroupIds.map((conversationId) => rtdb.ref(`${CONVERSATIONS_PATH}/${conversationId}`).get())
+    candidateGroupIds.map((conversationId) =>
+      firstExistingSnapshot([
+        `${CONVERSATIONS_PATH}/${conversationId}`,
+        `${LEGACY_PATHS.conversations}/${conversationId}`,
+      ])
+    )
   );
   const conversations = conversationSnapshots
-    .map((snapshot, indexPosition) =>
-      snapshot.exists()
-        ? { id: ownedGroupIds[indexPosition], hidden: true, ...snapshot.val() }
+    .map(({ snapshot }, indexPosition) =>
+      snapshot?.exists()
+        ? { id: candidateGroupIds[indexPosition], hidden: true, ...snapshot.val() }
         : null
     )
     .filter(Boolean)
     .filter((conversation) => conversation.type === "group")
-    .filter((conversation) => conversation.createdBy === uid)
     .filter((conversation) => conversation.members?.[uid])
     .filter((conversation) => !index[conversation.id] && conversation.memberMeta?.[uid]?.hiddenAt);
 
@@ -552,6 +601,7 @@ async function deleteGroupConversation(uid, conversationId) {
   memberIds.forEach((memberId) => {
     updates[`${USER_CONVERSATIONS_PATH}/${memberId}/${conversationId}`] = null;
     updates[`${LEGACY_PATHS.userConversations}/${memberId}/${conversationId}`] = null;
+    updates[`${HIDDEN_GROUPS_BY_USER_PATH}/${memberId}/${conversationId}`] = null;
   });
 
   await rtdb.ref().update(updates);

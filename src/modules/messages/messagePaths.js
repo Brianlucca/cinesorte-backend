@@ -7,6 +7,7 @@ const MESSAGES_PATH = `${MESSAGE_ROOT}/messagesByConversation`;
 const USER_CONVERSATIONS_PATH = `${MESSAGE_ROOT}/conversationsByUser`;
 const DIRECT_PAIRS_PATH = `${MESSAGE_ROOT}/directPairs`;
 const GROUPS_BY_OWNER_PATH = `${MESSAGE_ROOT}/groupsByOwner`;
+const HIDDEN_GROUPS_BY_USER_PATH = `${MESSAGE_ROOT}/hiddenGroupsByUser`;
 
 const LEGACY_PATHS = {
   conversations: "messageConversations",
@@ -46,6 +47,7 @@ module.exports = {
   CONVERSATIONS_PATH,
   DIRECT_PAIRS_PATH,
   GROUPS_BY_OWNER_PATH,
+  HIDDEN_GROUPS_BY_USER_PATH,
   LEGACY_PATHS,
   MESSAGES_PATH,
   USER_CONVERSATIONS_PATH,
