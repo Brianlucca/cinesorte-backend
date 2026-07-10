@@ -1,4 +1,5 @@
 const memoryCache = new Map();
+const pendingFactories = new Map();
 const DEFAULT_TTL_SECONDS = 15;
 const MAX_CACHE_ENTRIES = Number(process.env.MEMORY_CACHE_MAX_ENTRIES || 500);
 
@@ -73,10 +74,18 @@ async function deleteByPrefix(prefix) {
 async function remember(key, ttlSeconds, factory) {
   const cached = await get(key);
   if (cached !== null) return cached;
+  if (pendingFactories.has(key)) return pendingFactories.get(key);
 
-  const value = await factory();
-  await set(key, value, ttlSeconds);
-  return value;
+  const pending = Promise.resolve()
+    .then(factory)
+    .then(async (value) => {
+      await set(key, value, ttlSeconds);
+      return value;
+    })
+    .finally(() => pendingFactories.delete(key));
+
+  pendingFactories.set(key, pending);
+  return pending;
 }
 
 module.exports = {

@@ -21,6 +21,10 @@ router.get('/profile-stats/:userId', verifyToken, socialController.getProfileSta
 router.get('/match/:targetUserId', verifyToken, socialController.getMatchPercentage);
 router.get('/followers/:userId', verifyToken, socialController.getUserFollowersList);
 router.get('/following/:userId', verifyToken, socialController.getUserFollowingList);
+router.post('/blocks', verifyToken, socialController.blockUser);
+router.delete('/blocks/:username', verifyToken, socialController.unblockUser);
+router.get('/blocks/:username/status', verifyToken, socialController.getBlockStatus);
+router.get('/blocks', verifyToken, socialController.getBlockedUsers);
 
 router.post('/reviews', verifyToken, validate(reviewSchema), reviewController.addReview);
 router.put('/reviews/:reviewId', verifyToken, validate(reviewUpdateSchema), reviewController.updateReview);

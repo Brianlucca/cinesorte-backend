@@ -1,4 +1,4 @@
-const { rtdb, admin } = require("../../config/firebase");
+const { db, rtdb, admin } = require("../../config/firebase");
 const { encryptText } = require("./messageCrypto.service");
 const AppError = require("../../shared/errors/AppError");
 const {
@@ -37,6 +37,16 @@ const {
 const MAX_GROUP_MEMBERS = 30;
 const MAX_CONVERSATIONS = 50;
 const MAX_MESSAGES = 60;
+
+async function ensureNotBlocked(uidA, uidB) {
+  const [aBlockedB, bBlockedA] = await Promise.all([
+    db.collection("users").doc(uidA).collection("blocked").doc(uidB).get(),
+    db.collection("users").doc(uidB).collection("blocked").doc(uidA).get(),
+  ]);
+  if (aBlockedB.exists || bBlockedA.exists) {
+    throw new AppError("Conversa indisponível entre estes usuários.", 403);
+  }
+}
 
 async function getConversationOrFail(conversationId, uid) {
   const { snapshot, path } = await firstExistingSnapshot([
@@ -119,6 +129,7 @@ async function listConversations(uid) {
 async function createDirectConversation(currentUser, { targetUserId, targetUsername }) {
   const target = targetUserId ? await getUserProfile(targetUserId) : await getUserByUsername(targetUsername);
   if (target.uid === currentUser.uid) throw new AppError("Voce não pode abrir conversa consigo mesmo.", 400);
+  await ensureNotBlocked(currentUser.uid, target.uid);
   await ensureFollowsUser(currentUser.uid, target.uid);
 
   const now = Date.now();
@@ -301,6 +312,10 @@ async function getMessages(uid, conversationId, { limit = 30, before = null } = 
 
 async function sendMessage(currentUser, conversationId, { text = "", media = null }) {
   const conversation = await getConversationOrFail(conversationId, currentUser.uid);
+  if (conversation.type === "direct") {
+    const targetUid = Object.keys(conversation.members || {}).find((memberId) => memberId !== currentUser.uid);
+    if (targetUid) await ensureNotBlocked(currentUser.uid, targetUid);
+  }
 
   const now = Date.now();
   const normalizedMedia = normalizeMedia(media);

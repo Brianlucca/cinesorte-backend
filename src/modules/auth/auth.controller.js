@@ -95,13 +95,24 @@ const recordSecurityEvent = async (req, uid, event, metadata = {}) => {
   try {
     const userRef = db.collection("users").doc(uid);
     if (typeof userRef.collection !== "function") return;
-
-    await userRef.collection("security_events").add({
+    const eventRef = userRef.collection("security_events").doc();
+    const payload = {
       event,
       ...metadata,
       ...getRequestSecurityContext(req),
       createdAt: admin.firestore.Timestamp.now(),
-    });
+    };
+
+    if (typeof db.runTransaction === "function") {
+      await db.runTransaction(async (transaction) => {
+        const userSnapshot = await transaction.get(userRef);
+        if (!userSnapshot.exists) return;
+        transaction.set(eventRef, payload);
+      });
+    } else {
+      const userSnapshot = await userRef.get();
+      if (userSnapshot.exists) await eventRef.set(payload);
+    }
   } catch (error) {
     logger.warn("security_event_record_failed", {
       uid,
@@ -508,9 +519,16 @@ async function deleteCollectionDataByField(collectionName, field, value) {
     const snapshot = await db.collection(collectionName).where(field, "==", value).limit(batchSize).get();
     if (snapshot.empty) break;
 
-    const batch = db.batch();
-    snapshot.docs.forEach((doc) => batch.delete(doc.ref));
-    await batch.commit();
+    if (typeof db.recursiveDelete === "function") {
+      await Promise.all(snapshot.docs.map((doc) => db.recursiveDelete(doc.ref)));
+    } else {
+      for (const doc of snapshot.docs) {
+        await deleteDocumentSubcollections(doc.ref);
+      }
+      const batch = db.batch();
+      snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
@@ -546,9 +564,20 @@ async function deleteSubcollections(userRef) {
     "lists",
     "followers",
     "following",
+    "blocked",
     "history",
     "security_events",
   ]);
+}
+
+async function recursiveDeleteUserDocument(userRef) {
+  if (typeof db.recursiveDelete === "function") {
+    await db.recursiveDelete(userRef);
+    return;
+  }
+
+  await deleteSubcollections(userRef);
+  await userRef.delete();
 }
 
 async function deleteSocialRelationshipReferences(uid, userRef) {
@@ -611,10 +640,10 @@ async function deleteAccountData(uid) {
   await deleteCollectionDataByField("notifications", "recipientId", uid);
   await deleteCollectionDataByField("notifications", "senderId", uid);
 
-  await deleteSubcollections(userRef);
   await deleteAccountDeletionRequests(uid);
-  await userRef.delete();
+  await recursiveDeleteUserDocument(userRef);
   await admin.auth().deleteUser(uid);
+  await recursiveDeleteUserDocument(userRef);
 }
 
 async function deleteAccountDeletionRequests(uid) {

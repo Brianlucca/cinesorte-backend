@@ -17,6 +17,7 @@ const {
 } = require("../socialFeed.service");
 const { getLikedReviewIds, setLikeState } = require("../reviewLikeState.service");
 const { deleteByPrefix } = require("../../../shared/cache/cache.service");
+const { markRatedReviewAsWatched } = require("../../interactions/ratedReviewWatch.service");
 
 const MAX_MENTIONS_PER_TEXT = 5;
 const REVIEW_PAGE_SIZE = 20;
@@ -100,6 +101,7 @@ exports.addReview = catchAsync(async (req, res, next) => {
   let levelUpInfo = null;
   let userDataCache = null;
   let newReviewId = null;
+  const reviewCreatedAt = new Date();
 
   await db.runTransaction(async (t) => {
     const userDoc = await t.get(userRef);
@@ -151,7 +153,7 @@ exports.addReview = catchAsync(async (req, res, next) => {
       text: text || "",
       likesCount: 0,
       commentsCount: 0,
-      createdAt: new Date(),
+      createdAt: reviewCreatedAt,
       username: safeUsername(userData.username) || null,
       userPhoto: userData.photoURL || null,
       levelTitle: newLevelTitle,
@@ -192,6 +194,17 @@ exports.addReview = catchAsync(async (req, res, next) => {
   }
 
   await deleteByPrefix("feed:");
+  if (rating !== null && rating !== undefined) {
+    await markRatedReviewAsWatched(uid, {
+      mediaId,
+      mediaType,
+      mediaTitle,
+      posterPath,
+      backdropPath,
+      rating,
+      createdAt: reviewCreatedAt,
+    });
+  }
   const mentions = extractMentions(text);
   if (mentions.length > 0 && userDataCache) {
     await notifyMentions(
@@ -245,6 +258,13 @@ exports.updateReview = catchAsync(async (req, res, next) => {
   });
 
   await batch.commit();
+  if (rating !== null && rating !== undefined) {
+    await markRatedReviewAsWatched(uid, {
+      ...oldData,
+      rating,
+      createdAt: oldData.createdAt,
+    });
+  }
   await deleteByPrefix("feed:");
 
   const newMentions = getNewMentions(oldData.text, text);
