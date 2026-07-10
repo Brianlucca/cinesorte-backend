@@ -5,6 +5,9 @@ const { getXPNeeded, checkTrophies } = require("../../shared/utils/gamification"
 const catchAsync = require("../../shared/utils/catchAsync");
 const AppError = require("../../shared/errors/AppError");
 const { deleteByPrefix } = require("../../shared/cache/cache.service");
+const { hasValidRating, markRatedReviewAsWatched } = require("./ratedReviewWatch.service");
+
+const RATED_REVIEW_RECONCILE_BATCH = 8;
 
 function serializeInteraction(data = {}) {
   return {
@@ -174,6 +177,12 @@ exports.getUserInteractions = catchAsync(async (req, res, next) => {
   res.status(200).json(snapshot.docs.map((doc) => serializeInteraction(doc.data())));
 });
 
+exports.getMediaInteraction = catchAsync(async (req, res) => {
+  const mediaId = String(req.params.mediaId || "").replace(/^(movie-|tv-)/, "");
+  const doc = await db.collection("interactions").doc(`${req.user.uid}_${mediaId}`).get();
+  res.status(200).json(doc.exists ? serializeInteraction(doc.data()) : null);
+});
+
 exports.getWatchDiary = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
   const { year } = req.query;
@@ -200,4 +209,50 @@ exports.getWatchDiary = catchAsync(async (req, res, next) => {
   });
 
   res.status(200).json(diary);
+});
+
+exports.reconcileRatedReviews = catchAsync(async (req, res) => {
+  const { uid } = req.user;
+  const userRef = db.collection("users").doc(uid);
+  const userDoc = await userRef.get();
+  if (!userDoc.exists) return res.status(404).json({ done: true, processed: 0 });
+
+  const userData = userDoc.data() || {};
+  if (userData.ratedReviewsReconciled === true) {
+    return res.status(200).json({ done: true, processed: 0 });
+  }
+
+  let query = db
+    .collection("reviews")
+    .where("userId", "==", uid)
+    .orderBy("createdAt", "asc")
+    .limit(RATED_REVIEW_RECONCILE_BATCH);
+  if (userData.ratedReviewsReconcileCursor) {
+    query = query.startAfter(new Date(Number(userData.ratedReviewsReconcileCursor)));
+  }
+
+  const snapshot = await query.get();
+  let markedWatched = 0;
+  for (const reviewDoc of snapshot.docs) {
+    const review = reviewDoc.data();
+    if (!hasValidRating(review.rating)) continue;
+    if (await markRatedReviewAsWatched(uid, review)) markedWatched += 1;
+  }
+
+  const done = snapshot.size < RATED_REVIEW_RECONCILE_BATCH;
+  if (done) {
+    await userRef.update({
+      ratedReviewsReconciled: true,
+      ratedReviewsReconciledAt: new Date(),
+      ratedReviewsReconcileCursor: admin.firestore.FieldValue.delete(),
+    });
+  } else {
+    const lastReview = snapshot.docs[snapshot.docs.length - 1].data();
+    const createdAt = lastReview.createdAt?.toMillis
+      ? lastReview.createdAt.toMillis()
+      : new Date(lastReview.createdAt).getTime();
+    await userRef.update({ ratedReviewsReconcileCursor: createdAt });
+  }
+
+  res.status(200).json({ done, processed: snapshot.size, markedWatched });
 });

@@ -109,13 +109,24 @@ exports.followUser = catchAsync(async (req, res, next) => {
 
   if (uid === targetUserId) return next(new AppError("Você não pode seguir a si mesmo.", 400));
 
+  const [blockedByMe, blockedByTarget] = await Promise.all([
+    db.collection("users").doc(uid).collection("blocked").doc(targetUserId).get(),
+    db.collection("users").doc(targetUserId).collection("blocked").doc(uid).get(),
+  ]);
+  if (blockedByMe.exists || blockedByTarget.exists) {
+    return next(new AppError("Não é possível seguir este usuário.", 403));
+  }
+
   await db.runTransaction(async (t) => {
     const targetRef = db.collection("users").doc(targetUserId);
     const meRef = db.collection("users").doc(uid);
-    const targetDoc = await t.get(targetRef);
+    const followingRef = meRef.collection("following").doc(targetUserId);
+    const followerRef = targetRef.collection("followers").doc(uid);
+    const [targetDoc, followingDoc] = await Promise.all([t.get(targetRef), t.get(followingRef)]);
 
     if (!targetDoc.exists) throw new Error("Usuário alvo não encontrado no banco.");
 
+    if (followingDoc.exists) return;
     const targetData = targetDoc.data();
     const newFollowerCount = (targetData.followersCount || 0) + 1;
     const trophiesToAdd = checkTrophies(targetData, "followers", newFollowerCount);
@@ -124,9 +135,6 @@ exports.followUser = catchAsync(async (req, res, next) => {
     if (trophiesToAdd.length > 0) {
       updates.trophies = admin.firestore.FieldValue.arrayUnion(...trophiesToAdd);
     }
-
-    const followingRef = meRef.collection("following").doc(targetUserId);
-    const followerRef = targetRef.collection("followers").doc(uid);
 
     t.set(followingRef, { since: new Date() });
     t.set(followerRef, { since: new Date() });
@@ -201,6 +209,80 @@ exports.checkFollowStatus = catchAsync(async (req, res, next) => {
 
   const doc = await db.collection("users").doc(uid).collection("following").doc(targetUserId).get();
   res.status(200).json({ isFollowing: doc.exists });
+});
+
+exports.blockUser = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const targetUserId = await getUidByUsername(req.body.username);
+  if (uid === targetUserId) return next(new AppError("Você não pode bloquear a si mesmo.", 400));
+  const meRef = db.collection("users").doc(uid);
+  const targetRef = db.collection("users").doc(targetUserId);
+
+  await db.runTransaction(async (transaction) => {
+    const myFollowingRef = meRef.collection("following").doc(targetUserId);
+    const targetFollowerRef = targetRef.collection("followers").doc(uid);
+    const targetFollowingRef = targetRef.collection("following").doc(uid);
+    const myFollowerRef = meRef.collection("followers").doc(targetUserId);
+    const blockedRef = meRef.collection("blocked").doc(targetUserId);
+    const [targetDoc, myFollowing, targetFollowing, blockedDoc] = await Promise.all([
+      transaction.get(targetRef),
+      transaction.get(myFollowingRef),
+      transaction.get(targetFollowingRef),
+      transaction.get(blockedRef),
+    ]);
+    if (!targetDoc.exists) throw new AppError("Usuário não encontrado.", 404);
+    if (blockedDoc.exists) return;
+    const targetData = targetDoc.data() || {};
+
+    transaction.set(blockedRef, {
+      username: targetData.username || null,
+      name: targetData.name || null,
+      photoURL: targetData.photoURL || null,
+      blockedAt: new Date(),
+    });
+    if (myFollowing.exists) {
+      transaction.delete(myFollowingRef);
+      transaction.delete(targetFollowerRef);
+      transaction.update(meRef, { followingCount: admin.firestore.FieldValue.increment(-1) });
+      transaction.update(targetRef, { followersCount: admin.firestore.FieldValue.increment(-1) });
+    }
+    if (targetFollowing.exists) {
+      transaction.delete(targetFollowingRef);
+      transaction.delete(myFollowerRef);
+      transaction.update(targetRef, { followingCount: admin.firestore.FieldValue.increment(-1) });
+      transaction.update(meRef, { followersCount: admin.firestore.FieldValue.increment(-1) });
+    }
+  });
+
+  await deleteByPrefix("feed:");
+  res.status(200).json({ blocked: true });
+});
+
+exports.unblockUser = catchAsync(async (req, res) => {
+  const targetUserId = await getUidByUsername(req.params.username);
+  await db.collection("users").doc(req.user.uid).collection("blocked").doc(targetUserId).delete();
+  res.status(200).json({ blocked: false });
+});
+
+exports.getBlockStatus = catchAsync(async (req, res) => {
+  const targetUserId = await getUidByUsername(req.params.username);
+  const doc = await db.collection("users").doc(req.user.uid).collection("blocked").doc(targetUserId).get();
+  res.status(200).json({ isBlocked: doc.exists });
+});
+
+exports.getBlockedUsers = catchAsync(async (req, res) => {
+  const snapshot = await db.collection("users").doc(req.user.uid).collection("blocked")
+    .orderBy("blockedAt", "desc").limit(100).get();
+  const users = snapshot.docs.map((doc) => {
+    const data = doc.data() || {};
+    return {
+      username: data.username || null,
+      name: data.name || null,
+      photoURL: data.photoURL || null,
+      blockedAt: data.blockedAt || null,
+    };
+  }).filter((item) => item.username);
+  res.status(200).json(users);
 });
 
 exports.getProfileStats = catchAsync(async (req, res, next) => {

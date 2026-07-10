@@ -15,7 +15,9 @@ router.post('/terms', verifyToken, userController.acceptTerms);
 
 router.post('/interact', verifyToken, validate(interactionSchema), interactionController.recordInteraction);
 router.get('/interactions', verifyToken, interactionController.getUserInteractions);
+router.get('/interactions/:mediaId', verifyToken, interactionController.getMediaInteraction);
 router.get('/diary', verifyToken, interactionController.getWatchDiary);
+router.post('/interactions/reconcile-rated-reviews', verifyToken, interactionController.reconcileRatedReviews);
 
 router.post('/lists', verifyToken, requireTerms, validate(listSchema), listController.upsertList);
 router.post('/lists/clone', verifyToken, requireTerms, listController.cloneList);

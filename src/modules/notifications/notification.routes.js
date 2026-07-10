@@ -4,6 +4,7 @@ const notificationController = require("./notification.controller");
 const { verifyToken } = require("../../shared/middleware/auth");
 
 router.get('/', verifyToken, notificationController.getNotifications);
+router.delete('/read', verifyToken, notificationController.deleteRead);
 router.put('/:notificationId/read', verifyToken, notificationController.markAsRead);
 router.get('/count', verifyToken, notificationController.getUnreadCount);
 

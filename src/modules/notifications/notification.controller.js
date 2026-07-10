@@ -6,7 +6,7 @@ const messageService = require("../messages/message.service");
 
 exports.getNotifications = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
-  const firestoreNotifications = await remember(notificationsListKey(uid), 10, async () => {
+  const firestorePromise = remember(notificationsListKey(uid), 10, async () => {
     const snapshot = await db
       .collection("notifications")
       .where("recipientId", "==", uid)
@@ -41,7 +41,10 @@ exports.getNotifications = catchAsync(async (req, res, next) => {
       };
     });
   });
-  const messageNotifications = await messageService.getMessageNotificationSummaries(uid, 5);
+  const [firestoreNotifications, messageNotifications] = await Promise.all([
+    firestorePromise,
+    messageService.getMessageNotificationSummaries(uid, 5),
+  ]);
   const notifications = [...messageNotifications, ...firestoreNotifications]
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .slice(0, 20);
@@ -63,11 +66,33 @@ exports.markAsRead = catchAsync(async (req, res, next) => {
   const doc = await notifRef.get();
 
   if (doc.exists && doc.data().recipientId === uid) {
-    await notifRef.update({ read: true });
+    await notifRef.delete();
     await del(notificationsListKey(uid));
     await del(notificationsCountKey(uid));
   }
   res.status(200).json({ message: "Lida." });
+});
+
+exports.deleteRead = catchAsync(async (req, res) => {
+  const { uid } = req.user;
+  const snapshot = await db
+    .collection("notifications")
+    .where("recipientId", "==", uid)
+    .limit(200)
+    .get();
+  const readDocs = snapshot.docs.filter((doc) => doc.data().read === true);
+
+  if (readDocs.length > 0) {
+    const batch = db.batch();
+    readDocs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+  }
+
+  await Promise.all([
+    del(notificationsListKey(uid)),
+    del(notificationsCountKey(uid)),
+  ]);
+  res.status(200).json({ deleted: readDocs.length });
 });
 
 exports.getUnreadCount = catchAsync(async (req, res, next) => {

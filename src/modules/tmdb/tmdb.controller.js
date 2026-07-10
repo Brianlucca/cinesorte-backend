@@ -1,6 +1,17 @@
 const tmdbApi = require("./tmdb.client");
 const { db } = require("../../config/firebase");
 const catchAsync = require("../../shared/utils/catchAsync");
+const { remember } = require("../../shared/cache/cache.service");
+
+const tmdbCacheKey = (scope, params = {}) => {
+  const normalized = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .sort(([left], [right]) => left.localeCompare(right));
+  return `tmdb:${scope}:${JSON.stringify(normalized)}`;
+};
+
+const rememberTmdb = (scope, params, ttlSeconds, factory) =>
+  remember(tmdbCacheKey(scope, params), ttlSeconds, factory);
 
 const getPreferredGenreIds = (genreCounts = {}) => {
   const positiveGenres = Object.entries(genreCounts)
@@ -184,10 +195,13 @@ exports.getRecommendations = catchAsync(async (req, res, next) => {
 
 exports.getTrending = catchAsync(async (req, res, next) => {
   const { timeWindow } = req.params;
-  const response = await tmdbApi.get(`/trending/all/${timeWindow}`, {
-    params: { language: "pt-BR" },
+  const results = await rememberTmdb("trending", { timeWindow }, 300, async () => {
+    const response = await tmdbApi.get(`/trending/all/${timeWindow}`, {
+      params: { language: "pt-BR" },
+    });
+    return response.data.results;
   });
-  res.status(200).json(response.data.results);
+  res.status(200).json(results);
 });
 
 exports.getDiscover = catchAsync(async (req, res, next) => {
@@ -212,22 +226,28 @@ exports.getDiscover = catchAsync(async (req, res, next) => {
   if (provider_id) params.with_watch_providers = provider_id;
   if (monetization_types)
     params.with_watch_monetization_types = monetization_types;
-  const response = await tmdbApi.get(`/discover/${type}`, { params });
-  const results = response.data.results.map((item) => ({
-    ...item,
-    media_type: type,
-  }));
+  const results = await rememberTmdb("discover", { type, ...params }, 300, async () => {
+    const response = await tmdbApi.get(`/discover/${type}`, { params });
+    return response.data.results.map((item) => ({
+      ...item,
+      media_type: type,
+    }));
+  });
   res.status(200).json(results);
 });
 
 exports.getNowPlaying = catchAsync(async (req, res, next) => {
-  const response = await tmdbApi.get("/movie/now_playing", {
-    params: { language: "pt-BR", region: "BR" },
+  const results = await rememberTmdb("now-playing", {}, 600, async () => {
+    const response = await tmdbApi.get("/movie/now_playing", {
+      params: { language: "pt-BR", region: "BR" },
+    });
+    return response.data.results;
   });
-  res.status(200).json(response.data.results);
+  res.status(200).json(results);
 });
 
 exports.getLatestTrailers = catchAsync(async (req, res, next) => {
+  const cachedTrailers = await rememberTmdb("latest-trailers", {}, 600, async () => {
   const response = await tmdbApi.get("/movie/upcoming", {
     params: { language: "pt-BR", region: "BR" },
   });
@@ -248,11 +268,14 @@ exports.getLatestTrailers = catchAsync(async (req, res, next) => {
       }
     }),
   );
-  res.status(200).json(trailers.filter((t) => t !== null));
+    return trailers.filter((t) => t !== null);
+  });
+  res.status(200).json(cachedTrailers);
 });
 
 exports.getAnimeReleases = catchAsync(async (req, res, next) => {
-  const response = await tmdbApi.get("/discover/tv", {
+  const results = await rememberTmdb("anime-releases", {}, 600, async () => {
+    const response = await tmdbApi.get("/discover/tv", {
     params: {
       with_genres: 16,
       with_original_language: "ja",
@@ -261,18 +284,19 @@ exports.getAnimeReleases = catchAsync(async (req, res, next) => {
       language: "pt-BR",
     },
   });
-  res
-    .status(200)
-    .json(response.data.results.map((i) => ({ ...i, media_type: "tv" })));
+    return response.data.results.map((i) => ({ ...i, media_type: "tv" }));
+  });
+  res.status(200).json(results);
 });
 
 exports.getAnimations = catchAsync(async (req, res, next) => {
-  const response = await tmdbApi.get("/discover/movie", {
+  const results = await rememberTmdb("animations", {}, 600, async () => {
+    const response = await tmdbApi.get("/discover/movie", {
     params: { with_genres: 16, sort_by: "popularity.desc", language: "pt-BR" },
   });
-  res
-    .status(200)
-    .json(response.data.results.map((i) => ({ ...i, media_type: "movie" })));
+    return response.data.results.map((i) => ({ ...i, media_type: "movie" }));
+  });
+  res.status(200).json(results);
 });
 
 exports.getGenres = catchAsync(async (req, res, next) => {
@@ -288,13 +312,15 @@ exports.getGenres = catchAsync(async (req, res, next) => {
 
 exports.getDetails = catchAsync(async (req, res, next) => {
   const { mediaType, id } = req.params;
-  let append =
-    "credits,watch/providers,videos,recommendations,similar,images,external_ids,keywords";
-  if (mediaType === "person") append = "combined_credits,images,external_ids";
-  const response = await tmdbApi.get(`/${mediaType}/${id}`, {
-    params: { append_to_response: append, language: "pt-BR" },
-  });
-  if (mediaType !== "person") {
+  const details = await rememberTmdb("details", { mediaType, id }, 600, async () => {
+    let append =
+      "credits,watch/providers,videos,recommendations,similar,images,external_ids,keywords";
+    if (mediaType === "person") append = "combined_credits,images,external_ids";
+    const response = await tmdbApi.get(`/${mediaType}/${id}`, {
+      params: { append_to_response: append, language: "pt-BR" },
+    });
+    if (mediaType === "person") return response.data;
+
     const allVideos = response.data.videos?.results || [];
     let best =
       allVideos.find(
@@ -304,8 +330,9 @@ exports.getDetails = catchAsync(async (req, res, next) => {
       allVideos[0];
     response.data.trailer = best ? { key: best.key, site: best.site } : null;
     delete response.data.videos;
-  }
-  res.status(200).json(response.data);
+    return response.data;
+  });
+  res.status(200).json(details);
 });
 
 exports.getPersonExternalIds = catchAsync(async (req, res, next) => {
@@ -335,31 +362,40 @@ exports.searchMulti = catchAsync(async (req, res, next) => {
 });
 
 exports.getProviders = catchAsync(async (req, res, next) => {
-  const response = await tmdbApi.get(
-    `/${req.params.mediaType}/${req.params.id}/watch/providers`,
-  );
-  res.status(200).json(response.data.results.BR?.flatrate || []);
+  const { mediaType, id } = req.params;
+  const providers = await rememberTmdb("providers", { mediaType, id }, 1800, async () => {
+    const response = await tmdbApi.get(`/${mediaType}/${id}/watch/providers`);
+    return response.data.results.BR?.flatrate || [];
+  });
+  res.status(200).json(providers);
 });
 
 exports.getSeasonDetails = catchAsync(async (req, res, next) => {
-  const response = await tmdbApi.get(
-    `/tv/${req.params.id}/season/${req.params.seasonNumber}`,
-    { params: { language: "pt-BR" } },
-  );
-  res.status(200).json(response.data);
+  const { id, seasonNumber } = req.params;
+  const season = await rememberTmdb("season", { id, seasonNumber }, 600, async () => {
+    const response = await tmdbApi.get(`/tv/${id}/season/${seasonNumber}`, {
+      params: { language: "pt-BR" },
+    });
+    return response.data;
+  });
+  res.status(200).json(season);
 });
 
 exports.getEpisodeDetails = catchAsync(async (req, res, next) => {
-  const response = await tmdbApi.get(
-    `/tv/${req.params.id}/season/${req.params.seasonNumber}/episode/${req.params.episodeNumber}`,
-    {
+  const { id, seasonNumber, episodeNumber } = req.params;
+  const episode = await rememberTmdb("episode", { id, seasonNumber, episodeNumber }, 600, async () => {
+    const response = await tmdbApi.get(
+      `/tv/${id}/season/${seasonNumber}/episode/${episodeNumber}`,
+      {
       params: {
         append_to_response: "credits,images,videos",
         language: "pt-BR",
       },
-    },
-  );
-  res.status(200).json(response.data);
+      },
+    );
+    return response.data;
+  });
+  res.status(200).json(episode);
 });
 
 exports.getAwards = catchAsync(async (req, res, next) => {
