@@ -118,18 +118,10 @@ async function listConversations(uid) {
     .filter(Boolean)
     .filter((conversation) => conversation.members?.[uid]);
 
-  const blockedSnapshot = await db.collection("users").doc(uid).collection("blocked").get();
-  const blockedIds = new Set(blockedSnapshot.docs.map((doc) => doc.id));
-  const allowedConversations = conversations.filter((conversation) => {
-    if (conversation.type !== "direct") return true;
-    const otherUid = Object.keys(conversation.members || {}).find((memberId) => memberId !== uid);
-    return !otherUid || !blockedIds.has(otherUid);
-  });
-
-  const allMemberIds = allowedConversations.flatMap((conversation) => Object.keys(conversation.members || {}));
+  const allMemberIds = conversations.flatMap((conversation) => Object.keys(conversation.members || {}));
   const profiles = await getUsersByIds(allMemberIds);
 
-  return allowedConversations.map((conversation) =>
+  return conversations.map((conversation) =>
     serializeConversation(conversation, index[conversation.id] || {}, profiles, uid)
   );
 }
