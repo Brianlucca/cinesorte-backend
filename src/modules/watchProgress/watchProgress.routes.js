@@ -1,0 +1,16 @@
+const express = require("express");
+const { verifyToken } = require("../../shared/middleware/auth");
+const controller = require("./watchProgress.controller");
+const { extensionPairingLimiter } = require("../../shared/middleware/security");
+const router = express.Router();
+router.post("/pairing-codes", verifyToken, controller.createPairingCode);
+router.post("/pairing/exchange", extensionPairingLimiter, controller.exchangePairingCode);
+router.put("/", controller.verifyExtensionToken, controller.upsertProgress);
+router.delete("/", controller.verifyExtensionToken, controller.removeExtensionProgress);
+router.delete("/token/current", controller.verifyExtensionToken, controller.revokeExtensionToken);
+router.get("/token/current", controller.verifyExtensionToken, controller.getCurrentExtensionSession);
+router.get("/token/progress", controller.verifyExtensionToken, controller.listExtensionProgress);
+router.get("/", verifyToken, controller.listProgress);
+router.get("/extension/status", verifyToken, controller.getExtensionStatus);
+router.delete("/:id", verifyToken, controller.deleteProgress);
+module.exports = router;

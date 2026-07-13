@@ -3,6 +3,7 @@ const catchAsync = require("../../shared/utils/catchAsync");
 const AppError = require("../../shared/errors/AppError");
 const logger = require("../../shared/utils/logger");
 const { SUBJECT_LABELS, notifySupportTicketCreated } = require("../support/supportDelivery.service");
+const { CURRENT_TERMS_VERSION } = require("../../config/legal");
 
 const SUPPORT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
@@ -95,6 +96,10 @@ exports.getUserProfile = catchAsync(async (req, res, next) => {
 exports.acceptTerms = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
   const { version } = req.body;
+
+  if (version !== CURRENT_TERMS_VERSION) {
+    return next(new AppError("Versão dos termos inválida ou desatualizada.", 400));
+  }
 
   await db.collection("users").doc(uid).update({
     termsVersion: version,

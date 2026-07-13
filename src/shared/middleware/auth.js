@@ -7,6 +7,7 @@ const {
 const AppError = require("../errors/AppError");
 const catchAsync = require("../utils/catchAsync");
 const logger = require("../utils/logger");
+const { CURRENT_TERMS_VERSION } = require("../../config/legal");
 
 const getSessionCookie = (req) => {
   if (!req.cookies) return null;
@@ -80,7 +81,6 @@ const optionalVerify = catchAsync(async (req, res, next) => {
 });
 
 const requireTerms = (req, res, next) => {
-  const CURRENT_TERMS_VERSION = '4.0';
   if (!req.user || req.user.termsVersion !== CURRENT_TERMS_VERSION) {
     return next(new AppError('Aceite os novos termos.', 403));
   }

@@ -15,11 +15,11 @@ const AppError = require("../../shared/errors/AppError");
 const catchAsync = require("../../shared/utils/catchAsync");
 const logger = require("../../shared/utils/logger");
 const { containsProfanity } = require("../../shared/utils/profanity");
+const { CURRENT_TERMS_VERSION } = require("../../config/legal");
 
 const { resendVerificationEmailForAddress } = require("./emailVerification.service");
 
 const isProduction = env.NODE_ENV === "production";
-const CURRENT_TERMS_VERSION = "4.0";
 const ACCOUNT_DELETION_REQUESTS = "account_deletion_requests";
 const RECENT_LOGIN_MAX_AGE_MS = 5 * 60 * 1000;
 const EMAIL_CHANGE_TOKEN_MAX_AGE_MS = 60 * 60 * 1000;
@@ -1112,6 +1112,16 @@ exports.getSecurityOverview = catchAsync(async (req, res, next) => {
   }
 
   const activitySnapshot = await activitiesQuery.get();
+  const extensionSnapshot = await db.collection("extensionTokens").where("uid", "==", uid).limit(20).get();
+  const extensionDevices = extensionSnapshot.docs
+    .filter((tokenDoc) => !tokenDoc.data().revokedAt)
+    .map((tokenDoc) => {
+      const data = tokenDoc.data();
+      const agent = String(data.name || "");
+      const browser = /Edg\//.test(agent) ? "Microsoft Edge" : /Firefox\//.test(agent) ? "Firefox" : /Chrome\//.test(agent) ? "Google Chrome" : "Navegador";
+      const os = /Windows/i.test(agent) ? "Windows" : /Android/i.test(agent) ? "Android" : /Mac OS/i.test(agent) ? "macOS" : /Linux/i.test(agent) ? "Linux" : "Sistema desconhecido";
+      return { id: tokenDoc.id, type: "cinesorte_extension", label: "Extensão CineSorte", browser, os, createdAt: data.createdAt?.toDate?.()?.toISOString() || null, lastUsedAt: data.lastUsedAt?.toDate?.()?.toISOString() || null };
+    });
   const activityDocs = activitySnapshot.docs.slice(0, pageSize);
   const hasMoreActivities = activitySnapshot.docs.length > pageSize;
   const lastActivity = activityDocs[activityDocs.length - 1];
@@ -1143,8 +1153,17 @@ exports.getSecurityOverview = catchAsync(async (req, res, next) => {
       authTime: req.user.authTime ? new Date(req.user.authTime).toISOString() : null,
     },
     activities: activityDocs.map(formatSecurityEvent),
+    extensionDevices,
     nextActivitiesCursor,
   });
+});
+
+exports.revokeExtensionDevice = catchAsync(async (req, res, next) => {
+  const ref = db.collection("extensionTokens").doc(req.params.tokenId);
+  const snapshot = await ref.get();
+  if (!snapshot.exists || snapshot.data().uid !== req.user.uid) return next(new AppError("Extensão não encontrada.", 404));
+  await ref.delete();
+  res.sendStatus(204);
 });
 
 exports.changePassword = catchAsync(async (req, res, next) => {

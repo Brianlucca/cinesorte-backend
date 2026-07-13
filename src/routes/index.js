@@ -4,6 +4,7 @@ const socialRoutes = require("../modules/social/social.routes");
 const authRoutes = require("../modules/auth/auth.routes");
 const notificationRoutes = require("../modules/notifications/notification.routes");
 const messageRoutes = require("../modules/messages/message.routes");
+const watchProgressRoutes = require("../modules/watchProgress/watchProgress.routes");
 const { tmdbApiLimiter, messageLimiter } = require("../shared/middleware/security");
 
 const registerRoutes = (app) => {
@@ -16,6 +17,7 @@ const registerRoutes = (app) => {
   app.use("/api/social", socialRoutes);
   app.use("/api/notifications", notificationRoutes);
   app.use("/api/messages", messageLimiter, messageRoutes);
+  app.use("/api/watch-progress", watchProgressRoutes);
 };
 
 module.exports = registerRoutes;
