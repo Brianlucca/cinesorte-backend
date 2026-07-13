@@ -4,6 +4,15 @@ const { sendAlert } = require("../../infrastructure/monitoring/telegram.service"
 
 const userTracker = new Map();
 const SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-p]{32}$/;
+
+const isExtensionApiRequest = (req) => {
+  const path = req.originalUrl.split("?")[0];
+  const method = req.method === "OPTIONS" ? req.headers["access-control-request-method"] : req.method;
+  if (path === "/api/watch-progress/pairing/exchange" && method === "POST") return true;
+  if (path === "/api/watch-progress" && ["PUT", "DELETE"].includes(method)) return true;
+  return path.startsWith("/api/watch-progress/token/") && ["GET", "DELETE"].includes(method);
+};
 
 const trackerCleanupInterval = setInterval(() => {
   const now = Date.now();
@@ -18,6 +27,9 @@ if (typeof trackerCleanupInterval.unref === "function") {
 
 const normalizeOrigin = (value) => {
   if (!value) return "";
+  if (String(value).startsWith("chrome-extension://")) {
+    return String(value).replace(/\/$/, "");
+  }
   try {
     return new URL(value).origin.replace(/\/$/, "");
   } catch {
@@ -86,6 +98,14 @@ const registerLimiter = rateLimit({
   },
 });
 
+const extensionPairingLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Muitas tentativas de conexão. Gere um novo código e tente novamente mais tarde." },
+});
+
 const verificationEmailLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 3,
@@ -114,7 +134,8 @@ const shield = (req, res, next) => {
     if (!isPublicTmdbRoute) {
       const normalizedOrigin = normalizeOrigin(origin);
 
-      if (normalizedOrigin !== allowedOrigin) {
+      const trustedExtensionRequest = EXTENSION_ORIGIN_PATTERN.test(normalizedOrigin) && isExtensionApiRequest(req);
+      if (normalizedOrigin !== allowedOrigin && !trustedExtensionRequest) {
         if (req.headers["sec-fetch-site"] !== "same-origin") {
           sendAlert(`ORIGEM: Acesso de fonte desconhecida.\nOrigin: ${origin}`);
           return res.status(403).json({ message: "Origem não autorizada." });
@@ -134,6 +155,10 @@ const protectStateChangingRequests = (req, res, next) => {
   const refererOrigin = normalizeOrigin(req.headers.referer);
 
   if (requestOrigin === allowedOrigin || refererOrigin === allowedOrigin) {
+    return next();
+  }
+
+  if (EXTENSION_ORIGIN_PATTERN.test(requestOrigin) && isExtensionApiRequest(req)) {
     return next();
   }
 
@@ -184,6 +209,7 @@ module.exports = {
   messageLimiter,
   authLimiter,
   registerLimiter,
+  extensionPairingLimiter,
   verificationEmailLimiter,
   sanitizeInput,
   shield,

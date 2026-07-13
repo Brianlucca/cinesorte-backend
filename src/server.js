@@ -2,6 +2,7 @@ const env = require("./config/env");
 const createApp = require("./app");
 const logger = require("./shared/utils/logger");
 const { startBotListener } = require("./infrastructure/monitoring/telegram.service");
+const { startExtensionCleanup } = require("./modules/watchProgress/extensionCleanup.service");
 
 const app = createApp();
 
@@ -10,6 +11,7 @@ if (require.main === module) {
     logger.info(`Secure server running on port ${env.PORT}`);
     if (env.NODE_ENV !== "test") {
       startBotListener();
+      startExtensionCleanup();
     }
   });
 }
