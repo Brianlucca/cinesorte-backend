@@ -13,6 +13,90 @@ const tmdbCacheKey = (scope, params = {}) => {
 const rememberTmdb = (scope, params, ttlSeconds, factory) =>
   remember(tmdbCacheKey(scope, params), ttlSeconds, factory);
 
+const DETAILS_CACHE_TTL_SECONDS = Number(
+  process.env.TMDB_DETAILS_CACHE_TTL_SECONDS || 21600,
+);
+const DETAILS_PREWARM_LIMIT = Math.max(
+  0,
+  Number(process.env.TMDB_DETAILS_PREWARM_LIMIT || 6),
+);
+const DETAILS_PREWARM_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.TMDB_DETAILS_PREWARM_CONCURRENCY || 2),
+);
+const detailsPrewarmQueue = [];
+const queuedDetails = new Set();
+let activeDetailsPrewarms = 0;
+
+const fetchMediaDetails = async (mediaType, id) => {
+  let append =
+    "credits,watch/providers,videos,recommendations,similar,images,external_ids,keywords";
+  if (mediaType === "person") append = "combined_credits,images,external_ids";
+
+  const response = await tmdbApi.get(`/${mediaType}/${id}`, {
+    params: { append_to_response: append, language: "pt-BR" },
+  });
+  if (mediaType === "person") return response.data;
+
+  const allVideos = response.data.videos?.results || [];
+  const best =
+    allVideos.find(
+      (video) =>
+        video.type === "Trailer" &&
+        video.official &&
+        video.iso_639_1 === "pt",
+    ) ||
+    allVideos.find((video) => video.type === "Trailer" && video.official) ||
+    allVideos[0];
+
+  response.data.trailer = best ? { key: best.key, site: best.site } : null;
+  delete response.data.videos;
+  return response.data;
+};
+
+const getCachedMediaDetails = (mediaType, id) =>
+  rememberTmdb(
+    "details",
+    { mediaType, id: String(id) },
+    DETAILS_CACHE_TTL_SECONDS,
+    () => fetchMediaDetails(mediaType, id),
+  );
+
+const drainDetailsPrewarmQueue = () => {
+  while (
+    activeDetailsPrewarms < DETAILS_PREWARM_CONCURRENCY &&
+    detailsPrewarmQueue.length > 0
+  ) {
+    const task = detailsPrewarmQueue.shift();
+    activeDetailsPrewarms += 1;
+
+    getCachedMediaDetails(task.mediaType, task.id)
+      .catch(() => {})
+      .finally(() => {
+        activeDetailsPrewarms -= 1;
+        queuedDetails.delete(task.key);
+        drainDetailsPrewarmQueue();
+      });
+  }
+};
+
+const prewarmMediaDetails = (items, fallbackMediaType) => {
+  if (DETAILS_PREWARM_LIMIT === 0 || !Array.isArray(items)) return;
+
+  items.slice(0, DETAILS_PREWARM_LIMIT).forEach((item) => {
+    const mediaType = item?.media_type || fallbackMediaType;
+    if (!item?.id || !["movie", "tv"].includes(mediaType)) return;
+
+    const key = `${mediaType}:${item.id}`;
+    if (queuedDetails.has(key)) return;
+
+    queuedDetails.add(key);
+    detailsPrewarmQueue.push({ key, mediaType, id: item.id });
+  });
+
+  queueMicrotask(drainDetailsPrewarmQueue);
+};
+
 const getPreferredGenreIds = (genreCounts = {}) => {
   const positiveGenres = Object.entries(genreCounts)
     .filter(([, score]) => Number(score) > 0)
@@ -188,9 +272,14 @@ exports.getRecommendations = catchAsync(async (req, res, next) => {
   const filtered = recommendedItems.filter(
     (i) => !seenIds.has(i.id.toString()),
   );
-  res.status(200).json(
-    scoreItemsByGenres(filtered, genreCounts, preferredGenreIds, uid),
+  const results = scoreItemsByGenres(
+    filtered,
+    genreCounts,
+    preferredGenreIds,
+    uid,
   );
+  res.status(200).json(results);
+  prewarmMediaDetails(results, mediaType);
 });
 
 exports.getTrending = catchAsync(async (req, res, next) => {
@@ -202,6 +291,7 @@ exports.getTrending = catchAsync(async (req, res, next) => {
     return response.data.results;
   });
   res.status(200).json(results);
+  prewarmMediaDetails(results);
 });
 
 exports.getDiscover = catchAsync(async (req, res, next) => {
@@ -234,6 +324,7 @@ exports.getDiscover = catchAsync(async (req, res, next) => {
     }));
   });
   res.status(200).json(results);
+  prewarmMediaDetails(results, type);
 });
 
 exports.getNowPlaying = catchAsync(async (req, res, next) => {
@@ -244,6 +335,7 @@ exports.getNowPlaying = catchAsync(async (req, res, next) => {
     return response.data.results;
   });
   res.status(200).json(results);
+  prewarmMediaDetails(results, "movie");
 });
 
 exports.getLatestTrailers = catchAsync(async (req, res, next) => {
@@ -271,6 +363,7 @@ exports.getLatestTrailers = catchAsync(async (req, res, next) => {
     return trailers.filter((t) => t !== null);
   });
   res.status(200).json(cachedTrailers);
+  prewarmMediaDetails(cachedTrailers, "movie");
 });
 
 exports.getAnimeReleases = catchAsync(async (req, res, next) => {
@@ -287,6 +380,7 @@ exports.getAnimeReleases = catchAsync(async (req, res, next) => {
     return response.data.results.map((i) => ({ ...i, media_type: "tv" }));
   });
   res.status(200).json(results);
+  prewarmMediaDetails(results, "tv");
 });
 
 exports.getAnimations = catchAsync(async (req, res, next) => {
@@ -297,6 +391,7 @@ exports.getAnimations = catchAsync(async (req, res, next) => {
     return response.data.results.map((i) => ({ ...i, media_type: "movie" }));
   });
   res.status(200).json(results);
+  prewarmMediaDetails(results, "movie");
 });
 
 exports.getGenres = catchAsync(async (req, res, next) => {
@@ -312,26 +407,8 @@ exports.getGenres = catchAsync(async (req, res, next) => {
 
 exports.getDetails = catchAsync(async (req, res, next) => {
   const { mediaType, id } = req.params;
-  const details = await rememberTmdb("details", { mediaType, id }, 600, async () => {
-    let append =
-      "credits,watch/providers,videos,recommendations,similar,images,external_ids,keywords";
-    if (mediaType === "person") append = "combined_credits,images,external_ids";
-    const response = await tmdbApi.get(`/${mediaType}/${id}`, {
-      params: { append_to_response: append, language: "pt-BR" },
-    });
-    if (mediaType === "person") return response.data;
-
-    const allVideos = response.data.videos?.results || [];
-    let best =
-      allVideos.find(
-        (v) => v.type === "Trailer" && v.official && v.iso_639_1 === "pt",
-      ) ||
-      allVideos.find((v) => v.type === "Trailer" && v.official) ||
-      allVideos[0];
-    response.data.trailer = best ? { key: best.key, site: best.site } : null;
-    delete response.data.videos;
-    return response.data;
-  });
+  const details = await getCachedMediaDetails(mediaType, id);
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=21600");
   res.status(200).json(details);
 });
 
