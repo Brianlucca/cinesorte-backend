@@ -133,8 +133,12 @@ const shield = (req, res, next) => {
 
     if (!isPublicTmdbRoute) {
       const normalizedOrigin = normalizeOrigin(origin);
+      const extensionRequestWithoutOrigin = !origin && isExtensionApiRequest(req);
 
-      const trustedExtensionRequest = EXTENSION_ORIGIN_PATTERN.test(normalizedOrigin) && isExtensionApiRequest(req);
+      const trustedExtensionRequest =
+        (origin && EXTENSION_ORIGIN_PATTERN.test(normalizedOrigin) && isExtensionApiRequest(req)) ||
+        extensionRequestWithoutOrigin;
+
       if (normalizedOrigin !== allowedOrigin && !trustedExtensionRequest) {
         if (req.headers["sec-fetch-site"] !== "same-origin") {
           sendAlert(`ORIGEM: Acesso de fonte desconhecida.\nOrigin: ${origin}`);
@@ -158,7 +162,10 @@ const protectStateChangingRequests = (req, res, next) => {
     return next();
   }
 
-  if (EXTENSION_ORIGIN_PATTERN.test(requestOrigin) && isExtensionApiRequest(req)) {
+  if (
+    isExtensionApiRequest(req) &&
+    (!requestOrigin || EXTENSION_ORIGIN_PATTERN.test(requestOrigin))
+  ) {
     return next();
   }
 
