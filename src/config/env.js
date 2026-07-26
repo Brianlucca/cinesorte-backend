@@ -21,6 +21,7 @@ const envSchema = z.object({
   ACCOUNT_DELETION_CLEANUP_INTERVAL_MS: z.string().optional(),
   ACCOUNT_DELETION_CLEANUP_LIMIT: z.string().optional(),
   MEMORY_CACHE_MAX_ENTRIES: z.string().optional(),
+  DATABASE_URL: z.preprocess((value) => value === "" ? undefined : value, z.string().min(1).optional()),
 });
 
 const env = envSchema.parse(process.env);
