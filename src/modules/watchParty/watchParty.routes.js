@@ -9,6 +9,7 @@ router.use(verifyToken);
 router.get("/rooms/mine", controller.listMyRooms);
 router.get("/rooms/public", controller.listPublicRooms);
 router.get("/rooms/following", controller.listFollowingRooms);
+router.get("/rooms/live-version", controller.getLiveVersion);
 router.get("/internal/storage", controller.getStorageStatus);
 router.post("/rooms", validate(createRoomSchema), controller.createRoom);
 router.post("/rooms/join", validate(joinRoomSchema), controller.joinRoom);

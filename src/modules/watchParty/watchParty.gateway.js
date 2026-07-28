@@ -96,6 +96,11 @@ function removeSocket(roomId, socket) {
   const members = rooms.get(roomId);
   if (!members) return;
   members.delete(socket);
+  if (
+    socket.isStreaming &&
+    ![...members].some((member) => member.isHost && member.isStreaming)
+  )
+    runtime.setLive(roomId, false);
   if (members.size === 0) {
     rooms.delete(roomId);
     roomMessages.delete(roomId);
@@ -106,6 +111,32 @@ function removeSocket(roomId, socket) {
 
 function registerWatchPartyGateway(server) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+  const closeDeletedRoom = (roomId) => {
+    const members = [...(rooms.get(roomId) || [])];
+    broadcast(roomId, { type: "room-deleted", payload: { roomId } });
+    members.forEach((member) => member.close(4004, "Room deleted"));
+    rooms.delete(roomId);
+    roomMessages.delete(roomId);
+    roomMedia.delete(roomId);
+    runtime.deletePreview(roomId);
+  };
+  runtime.events.on("room-deleted", closeDeletedRoom);
+
+  const heartbeat = setInterval(() => {
+    wss.clients.forEach((socket) => {
+      if (socket.isAlive === false) {
+        socket.terminate();
+        return;
+      }
+      socket.isAlive = false;
+      socket.ping();
+    });
+  }, 25000);
+  heartbeat.unref();
+  wss.on("close", () => {
+    clearInterval(heartbeat);
+    runtime.events.off("room-deleted", closeDeletedRoom);
+  });
 
   server.on("upgrade", async (request, socket, head) => {
     try {
@@ -144,6 +175,8 @@ function registerWatchPartyGateway(server) {
     const { roomId, user } = socket;
     if (!rooms.has(roomId)) rooms.set(roomId, new Set());
     rooms.get(roomId).add(socket);
+    socket.isAlive = true;
+    socket.on("pong", () => { socket.isAlive = true; });
     socket.send(
       JSON.stringify({
         type: "connected",
@@ -259,7 +292,16 @@ function registerWatchPartyGateway(server) {
           return;
         }
         if (!SIGNAL_TYPES.has(message.type)) return;
-        if (message.type === "stream-stopped") runtime.deletePreview(roomId);
+        if (message.type === "host-ready") {
+          if (!socket.isHost) return;
+          socket.isStreaming = true;
+          runtime.setLive(roomId, true);
+        }
+        if (message.type === "stream-stopped") {
+          if (!socket.isHost) return;
+          socket.isStreaming = false;
+          runtime.setLive(roomId, false);
+        }
         const outgoing = {
           type: message.type,
           payload: message.payload || {},

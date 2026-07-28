@@ -14,6 +14,9 @@ exports.listPublicRooms = catchAsync(async (req, res) => {
 exports.listFollowingRooms = catchAsync(async (req, res) => {
   res.status(200).json(await service.listFollowingRooms(req.user.uid));
 });
+exports.getLiveVersion = catchAsync(async (req, res) => {
+  res.status(200).json(service.getLiveVersion());
+});
 exports.getRoom = catchAsync(async (req, res) => {
   res.status(200).json(await service.getRoom(req.params.roomId, req.user));
 });

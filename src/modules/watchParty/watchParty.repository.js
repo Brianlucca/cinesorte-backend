@@ -49,13 +49,15 @@ const listByHost = async (hostId) =>
       hostId,
     ])
   ).rows;
-const listPublic = async (userId) =>
-  (
+const listPublic = async (userId, liveRoomIds = []) => {
+  if (!liveRoomIds.length) return [];
+  return (
     await query(
-      `${roomSelect} WHERE privacy = 'public' AND status = 'active' AND NOT EXISTS (SELECT 1 FROM watch_party_access access WHERE access.room_id = watch_party_rooms.id AND access.user_id = $1 AND access.kind = 'blocked') ORDER BY updated_at DESC LIMIT 40`,
-      [userId],
+      `${roomSelect} WHERE id = ANY($2::uuid[]) AND privacy = 'public' AND status = 'active' AND NOT EXISTS (SELECT 1 FROM watch_party_access access WHERE access.room_id = watch_party_rooms.id AND access.user_id = $1 AND access.kind = 'blocked') ORDER BY updated_at DESC LIMIT 40`,
+      [userId, liveRoomIds],
     )
   ).rows;
+};
 const countActiveByHost = async (hostId) =>
   Number(
     (
@@ -65,12 +67,12 @@ const countActiveByHost = async (hostId) =>
       )
     ).rows[0]?.count || 0,
   );
-const listActiveByHosts = async (hostIds) => {
-  if (!hostIds.length) return [];
+const listActiveByHosts = async (hostIds, liveRoomIds = []) => {
+  if (!hostIds.length || !liveRoomIds.length) return [];
   return (
     await query(
-      `SELECT room.id, room.code, room.name, room.service, room.privacy, room.allow_guest_control AS "allowGuestControl", room.host_id AS "hostId", room.status, room.playback, room.created_at AS "createdAt", room.updated_at AS "updatedAt", 0 AS "participantCount" FROM watch_party_rooms room WHERE room.host_id = ANY($1::text[]) AND room.privacy IN ('public', 'following') AND room.status = 'active' ORDER BY room.updated_at DESC LIMIT 30`,
-      [hostIds],
+      `SELECT room.id, room.code, room.name, room.service, room.privacy, room.allow_guest_control AS "allowGuestControl", room.host_id AS "hostId", room.status, room.playback, room.created_at AS "createdAt", room.updated_at AS "updatedAt", 0 AS "participantCount" FROM watch_party_rooms room WHERE room.host_id = ANY($1::text[]) AND room.id = ANY($2::uuid[]) AND room.privacy IN ('followers', 'following') AND room.status = 'active' ORDER BY room.updated_at DESC LIMIT 30`,
+      [hostIds, liveRoomIds],
     )
   ).rows;
 };
