@@ -3,7 +3,7 @@ const { db } = require("../../config/firebase");
 const repository = require("./watchParty.repository");
 const runtime = require("./watchParty.runtime");
 
-const MAX_ACTIVE_ROOMS = 5;
+const MAX_ACTIVE_ROOMS = 1;
 const MAX_QUEUE_ITEMS = 100;
 const FREE_STORAGE_BYTES = 500 * 1000 * 1000;
 const STORAGE_BLOCK_RATIO = 0.9;
@@ -47,6 +47,21 @@ async function getFollowingIds(userId) {
   return ids;
 }
 
+async function getFollowerIds(userId) {
+  const cached = runtime.getCached(runtime.followers, userId);
+  if (cached) return cached;
+  const snapshot = await db
+    .collection("users")
+    .doc(userId)
+    .collection("followers")
+    .get();
+  const ids = snapshot.docs
+    .map((document) => document.id)
+    .filter((id) => id !== userId);
+  runtime.setCached(runtime.followers, userId, ids, FOLLOWING_CACHE_TTL_MS);
+  return ids;
+}
+
 async function getHostProfiles(hostIds) {
   const result = new Map();
   const missing = [];
@@ -73,12 +88,36 @@ async function getHostProfiles(hostIds) {
   return result;
 }
 
+async function resolveSelectedUserIds(identifiers = []) {
+  const unique = [...new Set(identifiers.filter(Boolean))];
+  if (!unique.length) return [];
+  const resolved = new Set();
+  const directSnapshots = await db.getAll(
+    ...unique.map((identifier) => db.collection("users").doc(identifier)),
+  );
+  directSnapshots.forEach((document) => {
+    if (document.exists) resolved.add(document.id);
+  });
+  for (let index = 0; index < unique.length; index += 30) {
+    const snapshot = await db
+      .collection("users")
+      .where("username", "in", unique.slice(index, index + 30))
+      .get();
+    snapshot.docs.forEach((document) => resolved.add(document.id));
+  }
+  return [...resolved];
+}
+
 async function assertRoomAccess(room, user, { codeEntry = false } = {}) {
   if (room.hostId === user.uid) return;
   if (await repository.hasAccess(room.id, user.uid, "blocked"))
     throw new AppError("Você foi removido desta sala.", 403);
   const selected = await repository.listAccess(room.id, "selected");
-  if (selected.length && !selected.includes(user.uid))
+  const explicitlySelected =
+    selected.includes(user.uid) ||
+    (user.username && selected.includes(user.username));
+  if (explicitlySelected) return;
+  if (selected.length)
     throw new AppError("Esta sala foi limitada a pessoas específicas.", 403);
   if (room.privacy === "public") return;
   if (room.privacy === "invite") {
@@ -107,7 +146,7 @@ async function createRoom(data, user) {
   ]);
   if (activeRooms >= MAX_ACTIVE_ROOMS)
     throw new AppError(
-      "Você já possui 5 salas ativas. Exclua uma sala para criar outra.",
+      "Seu perfil já possui uma sala. Exclua a sala atual antes de criar outra.",
       409,
     );
   if (storage.bytes / FREE_STORAGE_BYTES >= STORAGE_BLOCK_RATIO)
@@ -115,10 +154,17 @@ async function createRoom(data, user) {
       "Novas salas estão bloqueadas para proteger o armazenamento.",
       503,
     );
-  return hydrateRoom(await repository.createRoom(data, user));
+  const selectedUserIds = await resolveSelectedUserIds(data.selectedUserIds);
+  return hydrateRoom(
+    await repository.createRoom({ ...data, selectedUserIds }, user),
+  );
 }
 
-const listMyRooms = (userId) => repository.listByHost(userId);
+const listMyRooms = async (userId) =>
+  (await repository.listByHost(userId)).map((room) => ({
+    ...room,
+    isLive: runtime.isLive(room.id),
+  }));
 async function attachHostProfiles(rooms) {
   if (!rooms.length) return [];
   const hostIds = [...new Set(rooms.map((room) => room.hostId))];
@@ -138,15 +184,22 @@ async function attachHostProfiles(rooms) {
   });
 }
 async function listPublicRooms(userId) {
-  const rooms = (await repository.listPublic(userId)).filter(
+  const rooms = (await repository.listPublic(userId, runtime.getLiveRoomIds())).filter(
     (room) => room.hostId !== userId,
   );
   return attachHostProfiles(rooms);
 }
 async function listFollowingRooms(userId) {
-  const followingIds = await getFollowingIds(userId);
-  if (!followingIds.length) return [];
-  const rooms = await repository.listActiveByHosts(followingIds);
+  const [followingIds, followerIds] = await Promise.all([
+    getFollowingIds(userId),
+    getFollowerIds(userId),
+  ]);
+  const relatedHostIds = [...new Set([...followingIds, ...followerIds])];
+  if (!relatedHostIds.length) return [];
+  const rooms = await repository.listActiveByHosts(
+    relatedHostIds,
+    runtime.getLiveRoomIds(),
+  );
   const accessible = [];
   for (const room of rooms) {
     try {
@@ -179,7 +232,11 @@ async function updateSettings(roomId, data, userId) {
   if (room.hostId !== userId)
     throw new AppError("Somente o anfitrião pode alterar a sala.", 403);
   if (data.selectedUserIds)
-    await repository.replaceSelected(roomId, data.selectedUserIds);
+    await repository.replaceSelected(
+      roomId,
+      await resolveSelectedUserIds(data.selectedUserIds),
+    );
+  runtime.touchLiveVersion();
   return hydrateRoom(await repository.updateSettings(roomId, data));
 }
 async function blockUser(roomId, targetUserId, userId) {
@@ -202,7 +259,10 @@ async function deleteRoom(roomId, userId) {
   if (room.hostId !== userId)
     throw new AppError("Somente o anfitrião pode excluir a sala.", 403);
   await repository.deleteRoom(roomId);
+  runtime.setLive(roomId, false);
+  runtime.events.emit("room-deleted", roomId);
 }
+const getLiveVersion = () => ({ version: runtime.getLiveVersion() });
 async function canControlRoom(roomId, userId) {
   const room = await repository.findById(roomId);
   return Boolean(room && (room.hostId === userId || room.allowGuestControl));
@@ -240,4 +300,5 @@ module.exports = {
   canControlRoom,
   addQueueItem,
   getStorageStatus,
+  getLiveVersion,
 };
