@@ -81,7 +81,7 @@ The service includes operational tooling beyond request handling:
 
 ```text
 src/
-├── config/                    Environment, cookies, Firebase, PostgreSQL, and CORS
+├── config/                    Cookies, Firebase, PostgreSQL, and CORS
 ├── infrastructure/
 │   ├── database/migrations/   Watch-party database evolution
 │   ├── jobs/                  Background and lifecycle jobs
