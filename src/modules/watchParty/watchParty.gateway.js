@@ -89,6 +89,7 @@ function broadcastPresence(roomId) {
       online: true,
     });
   }
+  runtime.setParticipantCount(roomId, participants.length);
   broadcast(roomId, { type: "presence", payload: { participants } });
 }
 
@@ -106,6 +107,7 @@ function removeSocket(roomId, socket) {
     roomMessages.delete(roomId);
     roomMedia.delete(roomId);
     runtime.deletePreview(roomId);
+    runtime.deleteParticipantCount(roomId);
   } else broadcastPresence(roomId);
 }
 
@@ -119,6 +121,7 @@ function registerWatchPartyGateway(server) {
     roomMessages.delete(roomId);
     roomMedia.delete(roomId);
     runtime.deletePreview(roomId);
+    runtime.deleteParticipantCount(roomId);
   };
   runtime.events.on("room-deleted", closeDeletedRoom);
 
