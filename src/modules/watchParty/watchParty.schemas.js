@@ -2,18 +2,29 @@ const { z } = require("zod");
 
 const privacySchema = z.enum(["public", "invite", "followers", "following"]);
 const selectedUserIdsSchema = z.array(z.string().min(1).max(128)).max(100);
+const mediaSchema = z.object({
+  id: z.coerce.number().int().positive(),
+  type: z.enum(["movie", "tv"]),
+  title: z.string().trim().min(1).max(160),
+  backdropPath: z.string().startsWith("/").max(255).nullable().optional(),
+  posterPath: z.string().startsWith("/").max(255).nullable().optional(),
+}).nullable();
 const createRoomSchema = z.object({
   name: z.string().trim().min(3).max(48),
   service: z.enum(["screen", "local"]),
   privacy: privacySchema.default("invite"),
   selectedUserIds: selectedUserIdsSchema.default([]),
   allowGuestControl: z.boolean().default(false),
+  media: mediaSchema.optional().default(null),
 });
 const joinRoomSchema = z.object({ code: z.string().trim().toUpperCase().min(6).max(8) });
 const updateRoomSchema = z.object({
+  name: z.string().trim().min(3).max(48).optional(),
+  service: z.enum(["screen", "local"]).optional(),
   privacy: privacySchema.optional(),
   selectedUserIds: selectedUserIdsSchema.optional(),
   allowGuestControl: z.boolean().optional(),
+  media: mediaSchema.optional(),
 }).refine((value) => Object.keys(value).length > 0, "Nenhuma alteração informada.");
 const memberActionSchema = z.object({ userId: z.string().min(1).max(128) });
 const queueItemSchema = z.object({ videoId: z.string().trim().min(1).max(32), title: z.string().trim().min(1).max(120), thumbnail: z.string().url().optional().nullable() });

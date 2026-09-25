@@ -14,6 +14,14 @@ exports.listPublicRooms = catchAsync(async (req, res) => {
 exports.listFollowingRooms = catchAsync(async (req, res) => {
   res.status(200).json(await service.listFollowingRooms(req.user.uid));
 });
+exports.listAccessibleLiveRooms = catchAsync(async (req, res) => {
+  res.status(200).json(await service.listAccessibleLiveRooms(req.user));
+});
+exports.getProfileLiveRoom = catchAsync(async (req, res) => {
+  res.status(200).json(
+    await service.getProfileLiveRoom(req.params.username, req.user),
+  );
+});
 exports.getLiveVersion = catchAsync(async (req, res) => {
   res.status(200).json(service.getLiveVersion());
 });
@@ -29,6 +37,9 @@ exports.updateSettings = catchAsync(async (req, res) => {
     .json(
       await service.updateSettings(req.params.roomId, req.body, req.user.uid),
     );
+});
+exports.resetInviteCode = catchAsync(async (req, res) => {
+  res.status(200).json(await service.resetInviteCode(req.params.roomId, req.user.uid));
 });
 exports.deleteRoom = catchAsync(async (req, res) => {
   await service.deleteRoom(req.params.roomId, req.user.uid);
