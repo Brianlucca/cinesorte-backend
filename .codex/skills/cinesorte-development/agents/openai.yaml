@@ -1,0 +1,4 @@
+interface:
+  display_name: "CineSorte Development"
+  short_description: "Fluxo de desenvolvimento do frontend e backend CineSorte"
+  default_prompt: "Trabalhe nos repositórios CineSorte seguindo as regras de branch, PR e commits do projeto."
