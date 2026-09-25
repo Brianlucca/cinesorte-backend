@@ -1,6 +1,6 @@
 const { getPool, query } = require("../../config/postgres");
 
-const roomSelect = `SELECT id, code, name, service, privacy, allow_guest_control AS "allowGuestControl", host_id AS "hostId", status, playback, created_at AS "createdAt", updated_at AS "updatedAt" FROM watch_party_rooms`;
+const roomSelect = `SELECT id, code, name, service, privacy, allow_guest_control AS "allowGuestControl", host_id AS "hostId", status, playback, media, created_at AS "createdAt", updated_at AS "updatedAt" FROM watch_party_rooms`;
 const generateCode = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
 async function createRoom(data, user) {
@@ -11,7 +11,7 @@ async function createRoom(data, user) {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
         const result = await client.query(
-          `INSERT INTO watch_party_rooms (code, name, service, privacy, allow_guest_control, host_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, code, name, service, privacy, allow_guest_control AS "allowGuestControl", host_id AS "hostId", status, playback, created_at AS "createdAt", updated_at AS "updatedAt"`,
+          `INSERT INTO watch_party_rooms (code, name, service, privacy, allow_guest_control, host_id, media) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, code, name, service, privacy, allow_guest_control AS "allowGuestControl", host_id AS "hostId", status, playback, media, created_at AS "createdAt", updated_at AS "updatedAt"`,
           [
             generateCode(),
             data.name,
@@ -19,6 +19,7 @@ async function createRoom(data, user) {
             data.privacy,
             data.allowGuestControl,
             user.uid,
+            data.media ? JSON.stringify(data.media) : null,
           ],
         );
         room = result.rows[0];
@@ -58,6 +59,15 @@ const listPublic = async (userId, liveRoomIds = []) => {
     )
   ).rows;
 };
+const listLiveByIds = async (liveRoomIds = []) => {
+  if (!liveRoomIds.length) return [];
+  return (
+    await query(
+      `${roomSelect} WHERE id = ANY($1::uuid[]) AND status = 'active' ORDER BY updated_at DESC LIMIT 40`,
+      [liveRoomIds],
+    )
+  ).rows;
+};
 const countActiveByHost = async (hostId) =>
   Number(
     (
@@ -71,7 +81,7 @@ const listActiveByHosts = async (hostIds, liveRoomIds = []) => {
   if (!hostIds.length || !liveRoomIds.length) return [];
   return (
     await query(
-      `SELECT room.id, room.code, room.name, room.service, room.privacy, room.allow_guest_control AS "allowGuestControl", room.host_id AS "hostId", room.status, room.playback, room.created_at AS "createdAt", room.updated_at AS "updatedAt", 0 AS "participantCount" FROM watch_party_rooms room WHERE room.host_id = ANY($1::text[]) AND room.id = ANY($2::uuid[]) AND room.privacy IN ('followers', 'following') AND room.status = 'active' ORDER BY room.updated_at DESC LIMIT 30`,
+      `SELECT room.id, room.code, room.name, room.service, room.privacy, room.allow_guest_control AS "allowGuestControl", room.host_id AS "hostId", room.status, room.playback, room.media, room.created_at AS "createdAt", room.updated_at AS "updatedAt", 0 AS "participantCount" FROM watch_party_rooms room WHERE room.host_id = ANY($1::text[]) AND room.id = ANY($2::uuid[]) AND room.privacy IN ('followers', 'following') AND room.status = 'active' ORDER BY room.updated_at DESC LIMIT 30`,
       [hostIds, liveRoomIds],
     )
   ).rows;
@@ -88,10 +98,25 @@ const findByCode = async (code) =>
 const updateSettings = async (roomId, data) =>
   (
     await query(
-      `UPDATE watch_party_rooms SET privacy = COALESCE($2, privacy), allow_guest_control = COALESCE($3, allow_guest_control), updated_at = NOW() WHERE id = $1 RETURNING id, code, name, service, privacy, allow_guest_control AS "allowGuestControl", host_id AS "hostId", status, playback, created_at AS "createdAt", updated_at AS "updatedAt"`,
-      [roomId, data.privacy ?? null, data.allowGuestControl ?? null],
+      `UPDATE watch_party_rooms SET privacy = COALESCE($2, privacy), allow_guest_control = COALESCE($3, allow_guest_control), service = COALESCE($4, service), name = COALESCE($5, name), media = CASE WHEN $6::boolean THEN $7::jsonb ELSE media END, updated_at = NOW() WHERE id = $1 RETURNING id, code, name, service, privacy, allow_guest_control AS "allowGuestControl", host_id AS "hostId", status, playback, media, created_at AS "createdAt", updated_at AS "updatedAt"`,
+      [roomId, data.privacy ?? null, data.allowGuestControl ?? null, data.service ?? null, data.name ?? null, Object.prototype.hasOwnProperty.call(data, "media"), data.media ? JSON.stringify(data.media) : null],
     )
   ).rows[0] || null;
+async function resetInviteCode(roomId) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return (
+        await query(
+          `UPDATE watch_party_rooms SET code = $2, updated_at = NOW() WHERE id = $1 RETURNING id, code, name, service, privacy, allow_guest_control AS "allowGuestControl", host_id AS "hostId", status, playback, media, created_at AS "createdAt", updated_at AS "updatedAt"`,
+          [roomId, generateCode()],
+        )
+      ).rows[0] || null;
+    } catch (error) {
+      if (error.code !== "23505" || attempt === 4) throw error;
+    }
+  }
+  return null;
+}
 const deleteRoom = async (roomId) =>
   (
     await query(`DELETE FROM watch_party_rooms WHERE id = $1 RETURNING id`, [
@@ -200,11 +225,13 @@ module.exports = {
   createRoom,
   listByHost,
   listPublic,
+  listLiveByIds,
   countActiveByHost,
   listActiveByHosts,
   findById,
   findByCode,
   updateSettings,
+  resetInviteCode,
   deleteRoom,
   listAccess,
   hasAccess,

@@ -5,6 +5,7 @@ const profiles = new Map();
 const following = new Map();
 const followers = new Map();
 const liveRooms = new Set();
+const participantCounts = new Map();
 const events = new EventEmitter();
 const PREVIEW_TTL_MS = 2 * 60 * 1000;
 let liveVersion = 0;
@@ -41,6 +42,12 @@ const setLive = (roomId, live) => {
 const isLive = (roomId) => liveRooms.has(roomId);
 const getLiveRoomIds = () => [...liveRooms];
 const getLiveVersion = () => liveVersion;
+const setParticipantCount = (roomId, count) => {
+  participantCounts.set(roomId, Math.max(0, Number(count) || 0));
+  touchLiveVersion();
+};
+const getParticipantCount = (roomId) => participantCounts.get(roomId) || 0;
+const deleteParticipantCount = (roomId) => participantCounts.delete(roomId);
 const getCached = (cache, key) => {
   const item = cache.get(key);
   if (!item || item.expiresAt < Date.now()) {
@@ -60,6 +67,9 @@ module.exports = {
   isLive,
   getLiveRoomIds,
   getLiveVersion,
+  setParticipantCount,
+  getParticipantCount,
+  deleteParticipantCount,
   touchLiveVersion,
   events,
   profiles,

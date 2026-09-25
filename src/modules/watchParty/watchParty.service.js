@@ -71,9 +71,10 @@ async function getHostProfiles(hostIds) {
     else missing.push(hostId);
   }
   if (missing.length) {
-    const snapshots = await db.getAll(
-      ...missing.map((hostId) => db.collection("users").doc(hostId)),
-    );
+    const references = missing.map((hostId) => db.collection("users").doc(hostId));
+    const snapshots = typeof db.getAll === "function"
+      ? await db.getAll(...references)
+      : await Promise.all(references.map((reference) => reference.get()));
     for (const snapshot of snapshots) {
       const profile = snapshot.exists ? snapshot.data() : {};
       result.set(snapshot.id, profile);
@@ -156,7 +157,7 @@ async function createRoom(data, user) {
     );
   const selectedUserIds = await resolveSelectedUserIds(data.selectedUserIds);
   return hydrateRoom(
-    await repository.createRoom({ ...data, selectedUserIds }, user),
+    await repository.createRoom({ ...data, selectedUserIds, allowGuestControl: data.service === "local" && Boolean(data.allowGuestControl) }, user),
   );
 }
 
@@ -164,6 +165,7 @@ const listMyRooms = async (userId) =>
   (await repository.listByHost(userId)).map((room) => ({
     ...room,
     isLive: runtime.isLive(room.id),
+    participantCount: runtime.getParticipantCount(room.id),
   }));
 async function attachHostProfiles(rooms) {
   if (!rooms.length) return [];
@@ -174,14 +176,54 @@ async function attachHostProfiles(rooms) {
     return {
       ...room,
       preview: runtime.getPreview(room.id),
-      participantCount: 0,
+      participantCount: runtime.getParticipantCount(room.id),
       host: {
         id: room.hostId,
         username: profile.username || profile.displayName || "Usuário",
         photoURL: profile.photoURL || profile.photoUrl || null,
+        backgroundURL: profile.backgroundURL || null,
+        bio: profile.bio || "",
       },
     };
   });
+}
+async function listAccessibleLiveRooms(user) {
+  const rooms = await repository.listLiveByIds(runtime.getLiveRoomIds());
+  const accessible = [];
+  for (const room of rooms) {
+    try {
+      await assertRoomAccess(room, user);
+      accessible.push(room);
+    } catch {
+      // A descoberta nunca expõe transmissões sem permissão.
+    }
+  }
+  return attachHostProfiles(accessible);
+}
+async function getProfileLiveRoom(username, user) {
+  const normalizedUsername = String(username || "").trim().toLowerCase();
+  if (!normalizedUsername) return null;
+
+  const profileSnapshot = await db
+    .collection("users")
+    .where("username", "==", normalizedUsername)
+    .limit(1)
+    .get();
+  if (profileSnapshot.empty) return null;
+
+  const hostId = profileSnapshot.docs[0].id;
+  const rooms = await repository.listLiveByIds(runtime.getLiveRoomIds());
+  const room = rooms.find((candidate) => candidate.hostId === hostId);
+  if (!room) return null;
+
+  try {
+    await assertRoomAccess(room, user);
+  } catch {
+    // O perfil não revela nem a existência de uma live privada.
+    return null;
+  }
+
+  return (await attachHostProfiles([room]))[0] || null;
 }
 async function listPublicRooms(userId) {
   const rooms = (await repository.listPublic(userId, runtime.getLiveRoomIds())).filter(
@@ -218,7 +260,8 @@ async function getRoom(roomId, user) {
   if (!room || room.status !== "active")
     throw new AppError("Sala não encontrada ou encerrada.", 404);
   await assertRoomAccess(room, user);
-  return hydrateRoom(room);
+  const enrichedRoom = (await attachHostProfiles([room]))[0] || room;
+  return hydrateRoom(enrichedRoom);
 }
 async function joinByCode(code, user) {
   const room = await repository.findByCode(code);
@@ -231,13 +274,26 @@ async function updateSettings(roomId, data, userId) {
   if (!room) throw new AppError("Sala não encontrada.", 404);
   if (room.hostId !== userId)
     throw new AppError("Somente o anfitrião pode alterar a sala.", 403);
-  if (data.selectedUserIds)
+  const nextService = data.service || room.service;
+  const normalizedData = nextService === "local"
+    ? data
+    : { ...data, allowGuestControl: false };
+  if (normalizedData.selectedUserIds)
     await repository.replaceSelected(
       roomId,
-      await resolveSelectedUserIds(data.selectedUserIds),
+      await resolveSelectedUserIds(normalizedData.selectedUserIds),
     );
   runtime.touchLiveVersion();
-  return hydrateRoom(await repository.updateSettings(roomId, data));
+  return hydrateRoom(await repository.updateSettings(roomId, normalizedData));
+}
+async function resetInviteCode(roomId, userId) {
+  const room = await repository.findById(roomId);
+  if (!room) throw new AppError("Sala não encontrada.", 404);
+  if (room.hostId !== userId)
+    throw new AppError("Somente o anfitrião pode trocar o código de convite.", 403);
+  const updatedRoom = await repository.resetInviteCode(roomId);
+  runtime.touchLiveVersion();
+  return hydrateRoom(updatedRoom);
 }
 async function blockUser(roomId, targetUserId, userId) {
   const room = await repository.findById(roomId);
@@ -292,9 +348,12 @@ module.exports = {
   listMyRooms,
   listPublicRooms,
   listFollowingRooms,
+  listAccessibleLiveRooms,
+  getProfileLiveRoom,
   getRoom,
   joinByCode,
   updateSettings,
+  resetInviteCode,
   blockUser,
   deleteRoom,
   canControlRoom,
