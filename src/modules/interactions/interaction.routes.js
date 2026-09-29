@@ -4,12 +4,13 @@ const interactionController = require("./interaction.controller");
 const listController = require("../lists/list.controller");
 const userController = require("../users/user.controller");
 const authController = require("../auth/auth.controller");
-const { verifyToken, optionalVerify, requireTerms } = require("../../shared/middleware/auth");
+const { verifyToken, requireTerms } = require("../../shared/middleware/auth");
+const { publicContentLimiter } = require("../../shared/middleware/security");
 const validate = require("../../shared/middleware/validate");
 const { listSchema, addToListSchema, profileSchema, interactionSchema } = require("../../shared/validation/schemas");
 
 router.get('/search', verifyToken, userController.searchUsers);
-router.get('/profile/:username', userController.getUserProfile);
+router.get('/profile/:username', publicContentLimiter, userController.getUserProfile);
 router.put('/me', verifyToken, validate(profileSchema), authController.updateProfile);
 router.post('/terms', verifyToken, userController.acceptTerms);
 
