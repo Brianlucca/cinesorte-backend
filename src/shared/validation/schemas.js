@@ -25,6 +25,10 @@ const resendVerificationEmailSchema = z.object({
   email: z.string().email(),
 });
 
+const resetPasswordSchema = z.object({
+  email: z.string().email(),
+});
+
 const changeEmailSchema = z.object({
   newEmail: z.string().email(),
   currentPassword: z.string().min(1),
@@ -194,6 +198,7 @@ module.exports = {
   registerSchema,
   loginSchema,
   resendVerificationEmailSchema,
+  resetPasswordSchema,
   changeEmailSchema,
   verifyCurrentPasswordSchema,
   confirmEmailChangeSchema,
