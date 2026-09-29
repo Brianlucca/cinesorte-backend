@@ -24,6 +24,14 @@ const DETAILS_PREWARM_CONCURRENCY = Math.max(
   1,
   Number(process.env.TMDB_DETAILS_PREWARM_CONCURRENCY || 2),
 );
+const RECOMMENDATION_SEED_LIMIT = Math.max(
+  1,
+  Number(process.env.TMDB_RECOMMENDATION_SEED_LIMIT || 4),
+);
+const RECOMMENDATION_SEED_CACHE_TTL_SECONDS = Number(
+  process.env.TMDB_RECOMMENDATION_SEED_CACHE_TTL_SECONDS || 21600,
+);
+const RELATED_ITEMS_PER_SEED = 12;
 const detailsPrewarmQueue = [];
 const queuedDetails = new Set();
 let activeDetailsPrewarms = 0;
@@ -165,28 +173,117 @@ const stableHash = (value = "") => {
   return hash;
 };
 
+const getInteractionTimestamp = (interaction = {}) => {
+  const value = interaction.likedAt || interaction.watchedAt || interaction.lastInteraction;
+  if (typeof value?.toMillis === "function") return value.toMillis();
+  if (value?._seconds) return value._seconds * 1000;
+
+  const timestamp = new Date(value || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const getRecommendationSeeds = (interactions = [], mediaType) =>
+  interactions
+    .filter(
+      (interaction) =>
+        interaction.mediaId &&
+        interaction.mediaType === mediaType &&
+        !interaction.disliked &&
+        (interaction.liked || interaction.watched),
+    )
+    .sort((first, second) => {
+      const firstSignal = (first.liked ? 4 : 0) + (first.watched ? 1 : 0);
+      const secondSignal = (second.liked ? 4 : 0) + (second.watched ? 1 : 0);
+      return (
+        secondSignal - firstSignal ||
+        getInteractionTimestamp(second) - getInteractionTimestamp(first)
+      );
+    })
+    .slice(0, RECOMMENDATION_SEED_LIMIT);
+
+const getCachedSeedRecommendations = (mediaType, mediaId) =>
+  rememberTmdb(
+    "recommendation-seed",
+    { mediaType, mediaId: String(mediaId) },
+    RECOMMENDATION_SEED_CACHE_TTL_SECONDS,
+    async () => {
+      const recommendationResponse = await tmdbApi.get(
+        `/${mediaType}/${mediaId}/recommendations`,
+        { params: { language: "pt-BR" } },
+      );
+      const recommendations = recommendationResponse.data?.results || [];
+      if (recommendations.length > 0) return recommendations;
+
+      const similarResponse = await tmdbApi.get(`/${mediaType}/${mediaId}/similar`, {
+        params: { language: "pt-BR" },
+      });
+      return similarResponse.data?.results || [];
+    },
+  );
+
+const getSeedRecommendations = async (interactions, mediaType) => {
+  const seeds = getRecommendationSeeds(interactions, mediaType);
+  const affinityScores = new Map();
+  if (seeds.length === 0) return { items: [], affinityScores };
+
+  const responses = await Promise.allSettled(
+    seeds.map((seed) => getCachedSeedRecommendations(mediaType, seed.mediaId)),
+  );
+  const items = [];
+
+  responses.forEach((response, seedIndex) => {
+    if (response.status !== "fulfilled") return;
+
+    const seedWeight = seeds[seedIndex]?.liked ? 4 : 1;
+
+    response.value.slice(0, RELATED_ITEMS_PER_SEED).forEach((item, rank) => {
+      if (!item?.id || !item.poster_path) return;
+
+      const key = String(item.id);
+      const rankWeight = (RELATED_ITEMS_PER_SEED - rank) / RELATED_ITEMS_PER_SEED;
+      affinityScores.set(key, (affinityScores.get(key) || 0) + seedWeight + rankWeight);
+      items.push({ ...item, media_type: mediaType });
+    });
+  });
+
+  return { items: mergeUniqueItems(items), affinityScores };
+};
+
 const scoreItemsByGenres = (
   items = [],
   genreCounts = {},
   preferredGenreIds = [],
   userId = "",
+  affinityScores = new Map(),
 ) => {
   if (!Array.isArray(items) || items.length === 0) {
     return [];
   }
 
   const preferredGenreSet = new Set(preferredGenreIds.map((id) => Number(id)));
+  const maxGenreWeight = Math.max(
+    1,
+    ...preferredGenreIds.map((id) => Number(genreCounts[String(id)] || 0)),
+  );
+
+  const getPersonalizedScore = (item) => {
+    const affinityScore = Number(affinityScores.get(String(item.id)) || 0) * 6;
+    const genreScore = (item.genre_ids || []).reduce((total, genreId) => {
+      if (!preferredGenreSet.has(genreId)) return total;
+      return total + Number(genreCounts[String(genreId)] || 0) / maxGenreWeight;
+    }, 0) * 3;
+    const ratingScore = Math.max(0, Number(item.vote_average || 0)) / 10;
+    const confidenceScore = Math.min(
+      1,
+      Math.log10(Math.max(1, Number(item.vote_count || 0))) / 4,
+    );
+
+    return affinityScore + genreScore + ratingScore + confidenceScore;
+  };
 
   return [...items].sort((a, b) => {
-    const scoreA = (a.genre_ids || []).reduce((total, genreId) => {
-      const weight = Number(genreCounts[String(genreId)] || 0);
-      return preferredGenreSet.has(genreId) ? total + weight : total;
-    }, 0);
-
-    const scoreB = (b.genre_ids || []).reduce((total, genreId) => {
-      const weight = Number(genreCounts[String(genreId)] || 0);
-      return preferredGenreSet.has(genreId) ? total + weight : total;
-    }, 0);
+    const scoreA = getPersonalizedScore(a);
+    const scoreB = getPersonalizedScore(b);
 
     if (scoreB !== scoreA) {
       return scoreB - scoreA;
@@ -230,9 +327,26 @@ exports.getRecommendations = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
   const { mediaType } = req.params;
   const page = req.query.page || 1;
-  const userDoc = await db.collection("users").doc(uid).get();
+  const [userDoc, interactionsSnap] = await Promise.all([
+    db.collection("users").doc(uid).get(),
+    db
+      .collection("interactions")
+      .where("userId", "==", uid)
+      .select(
+        "mediaId",
+        "mediaType",
+        "liked",
+        "disliked",
+        "watched",
+        "likedAt",
+        "watchedAt",
+        "lastInteraction",
+      )
+      .get(),
+  ]);
   const genreCounts = userDoc.exists ? userDoc.data().genreCounts || {} : {};
   const preferredGenreIds = getPreferredGenreIds(genreCounts);
+  const interactions = interactionsSnap.docs.map((doc) => doc.data());
 
   const discoverRequests = preferredGenreIds.length > 0
     ? preferredGenreIds.map((genreId) =>
@@ -259,16 +373,15 @@ exports.getRecommendations = catchAsync(async (req, res, next) => {
         }),
       ];
 
-  const responses = await Promise.all(discoverRequests);
+  const [responses, seedRecommendations] = await Promise.all([
+    Promise.all(discoverRequests),
+    getSeedRecommendations(interactions, mediaType),
+  ]);
   const recommendedItems = mergeUniqueItems(
+    seedRecommendations.items,
     ...responses.map((response) => response.data?.results || []),
   );
-  const interactionsSnap = await db
-    .collection("interactions")
-    .where("userId", "==", uid)
-    .select("mediaId")
-    .get();
-  const seenIds = new Set(interactionsSnap.docs.map((d) => d.data().mediaId));
+  const seenIds = new Set(interactions.map((interaction) => String(interaction.mediaId)));
   const filtered = recommendedItems.filter(
     (i) => !seenIds.has(i.id.toString()),
   );
@@ -277,6 +390,7 @@ exports.getRecommendations = catchAsync(async (req, res, next) => {
     genreCounts,
     preferredGenreIds,
     uid,
+    seedRecommendations.affinityScores,
   );
   res.status(200).json(results);
   prewarmMediaDetails(results, mediaType);

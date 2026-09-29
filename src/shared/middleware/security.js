@@ -70,6 +70,14 @@ const tmdbApiLimiter = rateLimit({
   message: { message: "Muitas requisições." },
 });
 
+const publicContentLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Muitas consultas públicas. Tente novamente em instantes." },
+});
+
 const messageLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
   max: 180,
@@ -112,6 +120,18 @@ const verificationEmailLimiter = rateLimit({
   handler: (req, res) => {
     if (env.NODE_ENV === "production")
       sendAlert(`VERIFICATION EMAIL RATE LIMIT: IP ${req.ip} bloqueado.`);
+    res.status(429).json({ message: "Muitas solicitações. Tente novamente mais tarde." });
+  },
+});
+
+const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    if (env.NODE_ENV === "production")
+      sendAlert(`PASSWORD RESET RATE LIMIT: IP ${req.ip} bloqueado.`);
     res.status(429).json({ message: "Muitas solicitações. Tente novamente mais tarde." });
   },
 });
@@ -213,11 +233,13 @@ const sanitizeInput = (req, res, next) => {
 
 module.exports = {
   tmdbApiLimiter,
+  publicContentLimiter,
   messageLimiter,
   authLimiter,
   registerLimiter,
   extensionPairingLimiter,
   verificationEmailLimiter,
+  passwordResetLimiter,
   sanitizeInput,
   shield,
   protectStateChangingRequests,

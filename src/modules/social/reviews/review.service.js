@@ -560,7 +560,7 @@ exports.deleteComment = catchAsync(async (req, res, next) => {
 
 exports.getMediaReviews = catchAsync(async (req, res, next) => {
   const { mediaId } = req.params;
-  const { uid } = req.user;
+  const { uid } = req.user || {};
 
   const snapshot = await db
     .collection("reviews")
