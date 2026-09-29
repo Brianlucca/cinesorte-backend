@@ -3,12 +3,13 @@ const router = express.Router();
 const authController = require("./auth.controller");
 const userController = require("../users/user.controller");
 const { verifyToken } = require("../../shared/middleware/auth");
-const { authLimiter, registerLimiter, verificationEmailLimiter } = require("../../shared/middleware/security");
+const { authLimiter, registerLimiter, verificationEmailLimiter, passwordResetLimiter } = require("../../shared/middleware/security");
 const validate = require("../../shared/middleware/validate");
 const {
   registerSchema,
   loginSchema,
   resendVerificationEmailSchema,
+  resetPasswordSchema,
   changeEmailSchema,
   verifyCurrentPasswordSchema,
   confirmEmailChangeSchema,
@@ -43,7 +44,7 @@ router.post('/me/delete-request', verifyToken, authController.requestAccountDele
 router.delete('/me', verifyToken, authController.deleteAccount);
 router.get('/profile/:username', verifyToken, authController.getPublicProfile);
 router.get('/search', verifyToken, userController.searchUsers);
-router.post('/reset-password', authController.resetPassword);
+router.post('/reset-password', passwordResetLimiter, validate(resetPasswordSchema), authController.resetPassword);
 router.get('/support/tickets', verifyToken, userController.getMySupportTickets);
 router.post('/support/tickets', verifyToken, validate(supportTicketSchema), userController.createSupportTicket);
 
