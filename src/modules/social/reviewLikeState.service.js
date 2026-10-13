@@ -81,7 +81,7 @@ async function setLikeState(uid, reviewId, liked) {
       createdAt: new Date(),
     }, { merge: true });
   } else {
-    await ref.delete().catch(() => {});
+    await ref.delete();
   }
 }
 

@@ -324,7 +324,10 @@ async function canControlRoom(roomId, userId) {
   return Boolean(room && (room.hostId === userId || room.allowGuestControl));
 }
 async function getStorageStatus(user) {
-  if (user.role !== "admin") throw new AppError("Acesso restrito.", 403);
+  const snapshot = await db.collection("users").doc(user.uid).get();
+  if (!snapshot.exists || snapshot.data()?.role !== "admin") {
+    throw new AppError("Acesso restrito.", 403);
+  }
   const { bytes } = await repository.getStorageUsage();
   const ratio = bytes / FREE_STORAGE_BYTES;
   return {

@@ -16,6 +16,13 @@ const catchAsync = require("../../shared/utils/catchAsync");
 const logger = require("../../shared/utils/logger");
 const { containsProfanity } = require("../../shared/utils/profanity");
 const { CURRENT_TERMS_VERSION } = require("../../config/legal");
+const {
+  rememberLocal,
+  delLocal,
+  deleteLocalByPrefix,
+} = require("../../shared/cache/cache.service");
+const { publicProfileKey } = require("../../shared/cache/cache.keys");
+const { invalidateUserCache } = require("../users/userCache.service");
 
 const { resendVerificationEmailForAddress } = require("./emailVerification.service");
 
@@ -1020,7 +1027,12 @@ exports.logout = catchAsync(async (req, res) => {
       try {
         const userDoc = await db.collection("users").doc(decodedClaims.uid).get();
         userData = userDoc.exists ? userDoc.data() || {} : {};
-      } catch {}
+      } catch (error) {
+        logger.warn("logout_user_lookup_failed", {
+          uid: decodedClaims.uid,
+          message: error?.message || "unknown",
+        });
+      }
 
       await auth.revokeRefreshTokens(decodedClaims.uid);
       logAuthEvent(req, "logout", {
@@ -1034,7 +1046,11 @@ exports.logout = catchAsync(async (req, res) => {
         email: decodedClaims.email || userData.email || null,
         username: userData.username || null,
       });
-    } catch {}
+    } catch (error) {
+      logger.warn("logout_session_cleanup_failed", {
+        message: error?.message || "unknown",
+      });
+    }
   }
 
   clearSessionCookies(res);
@@ -1100,7 +1116,12 @@ exports.getSecurityOverview = catchAsync(async (req, res, next) => {
     if (providers.includes("google.com") && providers.includes("password")) authProvider = "email_google";
     else if (providers.includes("google.com")) authProvider = "google";
     else if (providers.includes("password")) authProvider = "email";
-  } catch {}
+  } catch (error) {
+    logger.warn("security_provider_reconciliation_failed", {
+      uid,
+      message: error?.message || "unknown",
+    });
+  }
 
   let activitiesQuery = userRef
     .collection("security_events")
@@ -1475,6 +1496,7 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
   const userRef = db.collection("users").doc(uid);
   let usernameChanged = null;
   let photoChanged = null;
+  let previousUsername = req.user.username || null;
 
   try {
     await db.runTransaction(async (t) => {
@@ -1482,6 +1504,7 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
       if (!doc.exists) throw new Error("USER_NOT_FOUND");
 
       const userData = doc.data();
+      previousUsername = userData.username || previousUsername;
       const updates = {};
       const history = {};
 
@@ -1538,6 +1561,16 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
       });
     }
 
+    await Promise.all([
+      invalidateUserCache(uid),
+      previousUsername ? delLocal(publicProfileKey(previousUsername)) : Promise.resolve(),
+      usernameChanged ? delLocal(publicProfileKey(usernameChanged)) : Promise.resolve(),
+      deleteLocalByPrefix("users:search:"),
+      usernameChanged || photoChanged !== null
+        ? deleteLocalByPrefix("reviews:")
+        : Promise.resolve(),
+    ]);
+
     setNoStore(res);
     res.status(200).json({ message: "Perfil atualizado." });
   } catch (error) {
@@ -1554,27 +1587,34 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
 
 exports.getPublicProfile = catchAsync(async (req, res, next) => {
   const { username } = req.params;
-  const snapshot = await db.collection("users").where("username", "==", username).limit(1).get();
-  if (snapshot.empty) return next(new AppError("Não encontrado.", 404));
+  const cached = await rememberLocal(publicProfileKey(username), 300, async () => {
+    const snapshot = await db.collection("users").where("username", "==", username).limit(1).get();
+    if (snapshot.empty) return { found: false, profile: null };
 
-  const rawData = snapshot.docs[0].data();
-  res.status(200).json({
-    name: rawData.name,
-    username: rawData.username,
-    photoURL: rawData.photoURL,
-    backgroundURL: rawData.backgroundURL,
-    bio: rawData.bio,
-    level: rawData.level || 1,
-    levelTitle: rawData.levelTitle || "Espectador",
-    totalXp: rawData.totalXp || 0,
-    reviewsCount: rawData.reviewsCount || 0,
-    watchedCount: rawData.watchedCount || 0,
-    followersCount: rawData.followersCount || 0,
-    followingCount: rawData.followingCount || 0,
-    createdAt: rawData.createdAt,
-    trophies: rawData.trophies || [],
-    genreCounts: rawData.genreCounts || {},
+    const rawData = snapshot.docs[0].data();
+    return {
+      found: true,
+      profile: {
+        name: rawData.name,
+        username: rawData.username,
+        photoURL: rawData.photoURL,
+        backgroundURL: rawData.backgroundURL,
+        bio: rawData.bio,
+        level: rawData.level || 1,
+        levelTitle: rawData.levelTitle || "Espectador",
+        totalXp: rawData.totalXp || 0,
+        reviewsCount: rawData.reviewsCount || 0,
+        watchedCount: rawData.watchedCount || 0,
+        followersCount: rawData.followersCount || 0,
+        followingCount: rawData.followingCount || 0,
+        createdAt: rawData.createdAt,
+        trophies: rawData.trophies || [],
+        genreCounts: rawData.genreCounts || {},
+      },
+    };
   });
+  if (!cached.found) return next(new AppError("Não encontrado.", 404));
+  res.status(200).json(cached.profile);
 });
 
 exports.resetPassword = catchAsync(async (req, res, next) => {

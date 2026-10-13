@@ -3,6 +3,18 @@ const router = express.Router();
 const tmdbController = require("./tmdb.controller");
 const { verifyToken } = require("../../shared/middleware/auth");
 
+router.use((req, res, next) => {
+  if (req.path.startsWith("/recommendations/")) {
+    res.set("Cache-Control", "private, no-store");
+  } else {
+    res.set(
+      "Cache-Control",
+      "public, max-age=60, stale-while-revalidate=300",
+    );
+  }
+  next();
+});
+
 router.get('/genres', tmdbController.getGenres);
 router.get('/trending/:timeWindow', tmdbController.getTrending);
 router.get('/discover', tmdbController.getDiscover);

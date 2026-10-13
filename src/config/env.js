@@ -21,6 +21,12 @@ const envSchema = z.object({
   ACCOUNT_DELETION_CLEANUP_INTERVAL_MS: z.string().optional(),
   ACCOUNT_DELETION_CLEANUP_LIMIT: z.string().optional(),
   MEMORY_CACHE_MAX_ENTRIES: z.string().optional(),
+  REDIS_URL: z.preprocess((value) => value === "" ? undefined : value, z.string().url().optional()),
+  CACHE_KEY_PREFIX: z.string().min(1).default("cinesorte"),
+  CACHE_L1_MAX_TTL_SECONDS: z.string().optional(),
+  CACHE_STALE_TTL_SECONDS: z.string().optional(),
+  CACHE_METRICS_INTERVAL_MS: z.string().optional(),
+  AUTH_USER_CACHE_TTL_SECONDS: z.string().optional(),
   DATABASE_URL: z.preprocess((value) => value === "" ? undefined : value, z.string().min(1).optional()),
 });
 
