@@ -145,7 +145,7 @@ const shield = (req, res, next) => {
 
   if (env.NODE_ENV === "production") {
     const isHealthCheck =
-      req.method === "GET" && HEALTH_CHECK_PATH.test(req.path);
+      ["GET", "HEAD"].includes(req.method) && HEALTH_CHECK_PATH.test(req.path);
     if (isHealthCheck) return next();
 
     if (BLOCKED_UA.test(userAgent)) {
