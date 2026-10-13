@@ -7,10 +7,13 @@ const messageRoutes = require("../modules/messages/message.routes");
 const watchProgressRoutes = require("../modules/watchProgress/watchProgress.routes");
 const watchPartyRoutes = require("../modules/watchParty/watchParty.routes");
 const { tmdbApiLimiter, messageLimiter } = require("../shared/middleware/security");
+const healthController = require("../shared/controllers/health.controller");
 
 const registerRoutes = (app) => {
   app.get("/", (req, res) => res.json({ message: "Cinesorte Secure API" }));
-  app.get("/api/health", (req, res) => res.sendStatus(200));
+  app.get("/api/health/live", healthController.live);
+  app.get("/api/health/ready", healthController.ready);
+  app.get("/api/health", healthController.ready);
 
   app.use("/api/tmdb", tmdbApiLimiter, tmdbRoutes);
   app.use("/api/users", authRoutes);

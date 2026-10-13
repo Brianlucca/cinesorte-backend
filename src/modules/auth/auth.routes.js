@@ -17,7 +17,6 @@ const {
   linkGoogleSchema,
   linkPasswordSchema,
   profileSchema,
-  supportTicketSchema,
 } = require("../../shared/validation/schemas");
 
 router.post('/register', registerLimiter, validate(registerSchema), authController.register);
@@ -45,7 +44,4 @@ router.delete('/me', verifyToken, authController.deleteAccount);
 router.get('/profile/:username', verifyToken, authController.getPublicProfile);
 router.get('/search', verifyToken, userController.searchUsers);
 router.post('/reset-password', passwordResetLimiter, validate(resetPasswordSchema), authController.resetPassword);
-router.get('/support/tickets', verifyToken, userController.getMySupportTickets);
-router.post('/support/tickets', verifyToken, validate(supportTicketSchema), userController.createSupportTicket);
-
 module.exports = router;

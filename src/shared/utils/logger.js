@@ -64,8 +64,8 @@ const consoleFormat = format.combine(
 const logger = createLogger({
   level: env.NODE_ENV === 'production' ? 'info' : 'debug',
   transports: [
-    new transports.File({ filename: 'logs/error.log', level: 'error', format: fileFormat }),
-    new transports.File({ filename: 'logs/combined.log', format: fileFormat })
+    new transports.File({ filename: 'logs/error.log', level: 'error', format: fileFormat, maxsize: 5 * 1024 * 1024, maxFiles: 5, tailable: true }),
+    new transports.File({ filename: 'logs/combined.log', format: fileFormat, maxsize: 10 * 1024 * 1024, maxFiles: 5, tailable: true })
   ]
 });
 

@@ -3,9 +3,81 @@ const { db, admin } = require("../../config/firebase");
 const tmdbApi = require("../tmdb/tmdb.client");
 const AppError = require("../../shared/errors/AppError");
 const catchAsync = require("../../shared/utils/catchAsync");
+const logger = require("../../shared/utils/logger");
+const {
+  get: getCache,
+  rememberLocal,
+  set: setCache,
+  delLocal,
+} = require("../../shared/cache/cache.service");
+const {
+  watchProgressListKey,
+  extensionProgressKey,
+  extensionStatusKey,
+} = require("../../shared/cache/cache.keys");
+const { getCachedAuthUser } = require("../users/userCache.service");
 const sha256 = (value) =>
   crypto.createHash("sha256").update(value).digest("hex");
 const now = () => admin.firestore.Timestamp.now();
+const PRIVATE_CACHE_TTL_SECONDS = 300;
+const PRIVATE_LIST_CACHE_TTL_SECONDS = 3600;
+const MIN_PROGRESS_WRITE_INTERVAL_MS = 5 * 60 * 1000;
+
+const toMillis = (value) => {
+  if (!value) return 0;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (typeof value.toDate === "function") return value.toDate().getTime();
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const serializeProgressData = (id, data) => {
+  return {
+    id,
+    ...data,
+    createdAt: data.createdAt?.toDate?.()?.toISOString() || data.createdAt || null,
+    updatedAt: data.updatedAt?.toDate?.()?.toISOString() || data.updatedAt || null,
+  };
+};
+
+const serializeProgress = (doc) => serializeProgressData(doc.id, doc.data());
+
+async function updateCachedProgressLists(userId, savedItem) {
+  const serialized = serializeProgressData(savedItem.id, savedItem);
+  await Promise.all(
+    [
+      { scope: "web", limit: 20 },
+      { scope: "extension", limit: 50 },
+    ].map(async ({ scope, limit }) => {
+      const key = watchProgressListKey(userId, scope);
+      const current = await getCache(key, { shared: false });
+      if (!Array.isArray(current)) return;
+      const next = [
+        serialized,
+        ...current.filter((item) => item.id !== serialized.id),
+      ].slice(0, limit);
+      await setCache(key, next, PRIVATE_LIST_CACHE_TTL_SECONDS, {
+        shared: false,
+      });
+    }),
+  );
+}
+
+async function removeFromCachedProgressLists(userId, progressId) {
+  await Promise.all(
+    ["web", "extension"].map(async (scope) => {
+      const key = watchProgressListKey(userId, scope);
+      const current = await getCache(key, { shared: false });
+      if (!Array.isArray(current)) return;
+      await setCache(
+        key,
+        current.filter((item) => item.id !== progressId),
+        PRIVATE_LIST_CACHE_TTL_SECONDS,
+        { shared: false },
+      );
+    }),
+  );
+}
 
 function parseEpisodeMetadata(payload = {}) {
   const raw = `${payload.seriesTitle || ""} ${payload.title || ""}`;
@@ -187,8 +259,9 @@ exports.exchangePairingCode = catchAsync(async (req, res, next) => {
       revokedAt: null,
     });
   });
-  const userSnapshot = await db.collection("users").doc(pairing.uid).get();
-  const user = userSnapshot.data() || {};
+  await delLocal(extensionStatusKey(pairing.uid));
+  const cachedUser = await getCachedAuthUser(pairing.uid);
+  const user = cachedUser.exists ? cachedUser.data : {};
   res.json({
     token,
     account: {
@@ -212,7 +285,12 @@ exports.verifyExtensionToken = catchAsync(async (req, res, next) => {
   req.extensionUser = { uid: token.uid, tokenRef: ref };
   const lastUsedMillis = token.lastUsedAt?.toMillis?.() || 0;
   if (Date.now() - lastUsedMillis >= 15 * 60 * 1000) {
-    ref.update({ lastUsedAt: now() }).catch(() => {});
+    ref.update({ lastUsedAt: now() }).catch((error) => {
+      logger.warn("extension_last_used_update_failed", {
+        uid: token.uid,
+        message: error?.message || "unknown",
+      });
+    });
   }
   next();
 });
@@ -242,8 +320,22 @@ exports.upsertProgress = catchAsync(async (req, res, next) => {
     .doc(req.extensionUser.uid)
     .collection("watchProgress")
     .doc(sha256(`${provider}:${providerContentId || title.toLowerCase()}`));
-  const existing = await ref.get();
-  const existingData = existing.exists ? existing.data() : null;
+  const progressCacheKey = extensionProgressKey(
+    req.extensionUser.uid,
+    ref.id,
+  );
+  const existing = await rememberLocal(
+    progressCacheKey,
+    PRIVATE_CACHE_TTL_SECONDS,
+    async () => {
+      const snapshot = await ref.get();
+      return {
+        exists: snapshot.exists,
+        data: snapshot.exists ? snapshot.data() : null,
+      };
+    },
+  );
+  const existingData = existing.exists ? existing.data : null;
   const looksLikeTechnicalReset =
     existingData &&
     existingData.positionSeconds >= 30 &&
@@ -261,6 +353,26 @@ exports.upsertProgress = catchAsync(async (req, res, next) => {
     existingData &&
     (existingData.seasonNumber !== episodeMetadata.seasonNumber ||
       existingData.episodeNumber !== episodeMetadata.episodeNumber);
+  const pauseStateChanged =
+    existingData && Boolean(existingData.paused) !== Boolean(payload.paused);
+  const completionMayChange =
+    existingData &&
+    !existingData.completed &&
+    positionSeconds / durationSeconds >= 0.85;
+  const shouldThrottleWrite =
+    existingData &&
+    !identityChanged &&
+    !pauseStateChanged &&
+    !completionMayChange &&
+    Date.now() - toMillis(existingData.updatedAt) <
+      MIN_PROGRESS_WRITE_INTERVAL_MS;
+  if (shouldThrottleWrite) {
+    return res.json({
+      saved: false,
+      ignored: "write-throttled",
+      completed: Boolean(existingData.completed),
+    });
+  }
   const needsDurationRepair =
     existingData?.tmdbId && !existingData.expectedDurationSeconds;
   const tmdb =
@@ -296,9 +408,22 @@ exports.upsertProgress = catchAsync(async (req, res, next) => {
     captureReason: String(payload.captureReason || "").slice(0, 30) || null,
     ...tmdb,
     updatedAt: now(),
-    createdAt: existing.exists ? existing.data().createdAt : now(),
+    createdAt: existing.exists ? existingData.createdAt : now(),
   };
   await ref.set(savedItem, { merge: true });
+  await Promise.all([
+    setCache(
+      progressCacheKey,
+      { exists: true, data: savedItem },
+      PRIVATE_CACHE_TTL_SECONDS,
+      { shared: false },
+    ),
+    updateCachedProgressLists(req.extensionUser.uid, {
+      id: ref.id,
+      ...(existingData || {}),
+      ...savedItem,
+    }),
+  ]);
   res.json({
     saved: true,
     completed,
@@ -315,50 +440,56 @@ exports.upsertProgress = catchAsync(async (req, res, next) => {
 });
 
 exports.listProgress = catchAsync(async (req, res) => {
-  const snapshot = await db
-    .collection("users")
-    .doc(req.user.uid)
-    .collection("watchProgress")
-    .orderBy("updatedAt", "desc")
-    .limit(20)
-    .get();
-  const items = snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-    createdAt: doc.data().createdAt?.toDate?.()?.toISOString() || null,
-    updatedAt: doc.data().updatedAt?.toDate?.()?.toISOString() || null,
-  }));
+  const items = await rememberLocal(
+    watchProgressListKey(req.user.uid, "web"),
+    PRIVATE_LIST_CACHE_TTL_SECONDS,
+    async () => {
+      const snapshot = await db
+        .collection("users")
+        .doc(req.user.uid)
+        .collection("watchProgress")
+        .orderBy("updatedAt", "desc")
+        .limit(20)
+        .get();
+      return snapshot.docs.map(serializeProgress);
+    },
+  );
   res.json(items);
 });
 
 exports.listExtensionProgress = catchAsync(async (req, res) => {
-  const snapshot = await db
-    .collection("users")
-    .doc(req.extensionUser.uid)
-    .collection("watchProgress")
-    .orderBy("updatedAt", "desc")
-    .limit(50)
-    .get();
-  const items = snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-    createdAt: doc.data().createdAt?.toDate?.()?.toISOString() || null,
-    updatedAt: doc.data().updatedAt?.toDate?.()?.toISOString() || null,
-  }));
+  const items = await rememberLocal(
+    watchProgressListKey(req.extensionUser.uid, "extension"),
+    PRIVATE_LIST_CACHE_TTL_SECONDS,
+    async () => {
+      const snapshot = await db
+        .collection("users")
+        .doc(req.extensionUser.uid)
+        .collection("watchProgress")
+        .orderBy("updatedAt", "desc")
+        .limit(50)
+        .get();
+      return snapshot.docs.map(serializeProgress);
+    },
+  );
   res.json(items);
 });
 
 exports.getExtensionStatus = catchAsync(async (req, res) => {
-  const snapshot = await db
-    .collection("extensionTokens")
-    .where("uid", "==", req.user.uid)
-    .limit(20)
-    .get();
-  const connected = snapshot.docs.some((doc) => !doc.data().revokedAt);
-  res.json({
-    connected,
-    devices: snapshot.docs.filter((doc) => !doc.data().revokedAt).length,
-  });
+  const status = await rememberLocal(
+    extensionStatusKey(req.user.uid),
+    PRIVATE_CACHE_TTL_SECONDS,
+    async () => {
+      const snapshot = await db
+        .collection("extensionTokens")
+        .where("uid", "==", req.user.uid)
+        .limit(20)
+        .get();
+      const devices = snapshot.docs.filter((doc) => !doc.data().revokedAt).length;
+      return { connected: devices > 0, devices };
+    },
+  );
+  res.json(status);
 });
 
 exports.removeExtensionProgress = catchAsync(async (req, res, next) => {
@@ -379,6 +510,10 @@ exports.removeExtensionProgress = catchAsync(async (req, res, next) => {
     .collection("watchProgress")
     .doc(id)
     .delete();
+  await Promise.all([
+    delLocal(extensionProgressKey(req.extensionUser.uid, id)),
+    removeFromCachedProgressLists(req.extensionUser.uid, id),
+  ]);
   res.sendStatus(204);
 });
 
@@ -391,15 +526,13 @@ exports.revokeExtensionToken = catchAsync(async (req, res) => {
   const batch = db.batch();
   snapshot.docs.forEach((doc) => batch.delete(doc.ref));
   await batch.commit();
+  await delLocal(extensionStatusKey(req.extensionUser.uid));
   res.sendStatus(204);
 });
 
 exports.getCurrentExtensionSession = catchAsync(async (req, res) => {
-  const userSnapshot = await db
-    .collection("users")
-    .doc(req.extensionUser.uid)
-    .get();
-  const user = userSnapshot.data() || {};
+  const cachedUser = await getCachedAuthUser(req.extensionUser.uid);
+  const user = cachedUser.exists ? cachedUser.data : {};
   res.json({
     valid: true,
     account: {
@@ -416,5 +549,9 @@ exports.deleteProgress = catchAsync(async (req, res) => {
     .collection("watchProgress")
     .doc(req.params.id)
     .delete();
+  await Promise.all([
+    delLocal(extensionProgressKey(req.user.uid, req.params.id)),
+    removeFromCachedProgressLists(req.user.uid, req.params.id),
+  ]);
   res.sendStatus(204);
 });

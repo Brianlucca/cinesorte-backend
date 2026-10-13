@@ -1,6 +1,14 @@
 const { db } = require("../../config/firebase");
 const admin = require("firebase-admin");
 const { getXPNeeded, checkTrophies } = require("../../shared/utils/gamification");
+const {
+  del,
+  deleteLocalByPrefix,
+} = require("../../shared/cache/cache.service");
+const {
+  mediaInteractionKey,
+  userInteractionsKey,
+} = require("../../shared/cache/cache.keys");
 
 const hasValidRating = (rating) => {
   const value = Number(rating);
@@ -65,6 +73,14 @@ async function markRatedReviewAsWatched(uid, reviewData) {
     transaction.update(userRef, updates);
     created = true;
   });
+
+  if (created) {
+    await Promise.all([
+      deleteLocalByPrefix(`recommendations:user:${uid}:`),
+      del(userInteractionsKey(uid)),
+      del(mediaInteractionKey(uid, mediaId)),
+    ]);
+  }
 
   return created;
 }

@@ -5,6 +5,7 @@ const logger = require("./shared/utils/logger");
 const { startBotListener } = require("./infrastructure/monitoring/telegram.service");
 const { startExtensionCleanup } = require("./modules/watchProgress/extensionCleanup.service");
 const { registerWatchPartyGateway } = require("./modules/watchParty/watchParty.gateway");
+const { close: closeCache } = require("./shared/cache/cache.service");
 
 const app = createApp();
 
@@ -18,6 +19,18 @@ if (require.main === module) {
       startExtensionCleanup();
     }
   });
+
+  const shutdown = (signal) => {
+    logger.info("server_shutdown_started", { signal });
+    server.close(async () => {
+      await closeCache();
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  };
+
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
 }
 
 module.exports = app;

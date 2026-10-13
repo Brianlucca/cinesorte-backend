@@ -4,10 +4,21 @@ const tmdbApi = require("../tmdb/tmdb.client");
 const { getXPNeeded, checkTrophies } = require("../../shared/utils/gamification");
 const catchAsync = require("../../shared/utils/catchAsync");
 const AppError = require("../../shared/errors/AppError");
-const { deleteByPrefix } = require("../../shared/cache/cache.service");
+const logger = require("../../shared/utils/logger");
+const {
+  del,
+  deleteLocalByPrefix,
+  remember,
+} = require("../../shared/cache/cache.service");
+const {
+  mediaInteractionKey,
+  userInteractionsKey,
+} = require("../../shared/cache/cache.keys");
 const { hasValidRating, markRatedReviewAsWatched } = require("./ratedReviewWatch.service");
+const { invalidateNotificationCache } = require("../notifications/notificationCache.service");
 
 const RATED_REVIEW_RECONCILE_BATCH = 8;
+const PERSONAL_OPTIONS_CACHE_TTL_SECONDS = 300;
 
 function serializeInteraction(data = {}) {
   return {
@@ -40,6 +51,7 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
   }
 
   const docId = `${uid}_${mediaId}`;
+  const normalizedMediaId = String(mediaId).replace(/^(movie-|tv-)/, "");
   const interactionRef = db.collection("interactions").doc(docId);
   const userRef = db.collection("users").doc(uid);
   let levelUpInfo = null;
@@ -63,7 +75,7 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
     let xpEarned = 0;
     let watchedInc = 0;
 
-    if (action === "like") {
+    if (action === "like" || action === "favorite") {
       const wasLiked = data.liked;
       data.liked = !data.liked;
       data.disliked = false;
@@ -145,7 +157,13 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
           userUpdates[`genreCounts.${g.id}`] =
             admin.firestore.FieldValue.increment(genreWeight);
         });
-      } catch (e) {}
+      } catch (error) {
+        logger.warn("interaction_genre_enrichment_failed", {
+          uid,
+          mediaId,
+          message: error?.message || "unknown",
+        });
+      }
     }
 
     if (newLevel > initialLevel) levelUpInfo = newLevel;
@@ -162,25 +180,49 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
       createdAt: new Date(),
       icon: "TrendingUp",
     });
-    await deleteByPrefix("notifications:");
+    await invalidateNotificationCache(uid);
   }
-  await deleteByPrefix("feed:");
+  await Promise.all([
+    deleteLocalByPrefix(`recommendations:user:${uid}:`),
+    del(userInteractionsKey(uid)),
+    del(mediaInteractionKey(uid, mediaId)),
+    ...(normalizedMediaId !== String(mediaId)
+      ? [del(mediaInteractionKey(uid, normalizedMediaId))]
+      : []),
+  ]);
   res.status(200).json({ message: "Sucesso." });
 });
 
 exports.getUserInteractions = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
-  const snapshot = await db
-    .collection("interactions")
-    .where("userId", "==", uid)
-    .get();
-  res.status(200).json(snapshot.docs.map((doc) => serializeInteraction(doc.data())));
+  const interactions = await remember(
+    userInteractionsKey(uid),
+    PERSONAL_OPTIONS_CACHE_TTL_SECONDS,
+    async () => {
+      const snapshot = await db
+        .collection("interactions")
+        .where("userId", "==", uid)
+        .get();
+      return snapshot.docs.map((doc) => serializeInteraction(doc.data()));
+    },
+  );
+  res.status(200).json(interactions);
 });
 
 exports.getMediaInteraction = catchAsync(async (req, res) => {
   const mediaId = String(req.params.mediaId || "").replace(/^(movie-|tv-)/, "");
-  const doc = await db.collection("interactions").doc(`${req.user.uid}_${mediaId}`).get();
-  res.status(200).json(doc.exists ? serializeInteraction(doc.data()) : null);
+  const { uid } = req.user;
+  const interaction = await remember(
+    mediaInteractionKey(uid, mediaId),
+    PERSONAL_OPTIONS_CACHE_TTL_SECONDS,
+    async () => {
+      const doc = await db.collection("interactions").doc(`${uid}_${mediaId}`).get();
+      return {
+        interaction: doc.exists ? serializeInteraction(doc.data()) : null,
+      };
+    },
+  );
+  res.status(200).json(interaction.interaction);
 });
 
 exports.getWatchDiary = catchAsync(async (req, res, next) => {

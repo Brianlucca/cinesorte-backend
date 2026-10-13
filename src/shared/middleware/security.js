@@ -137,12 +137,17 @@ const passwordResetLimiter = rateLimit({
 });
 
 const BLOCKED_UA = /PostmanRuntime|Insomnia|curl/i;
+const HEALTH_CHECK_PATH = /^\/api\/health(?:\/(?:live|ready))?$/;
 
 const shield = (req, res, next) => {
   const userAgent = req.headers["user-agent"] || "";
   const origin = req.headers.origin;
 
   if (env.NODE_ENV === "production") {
+    const isHealthCheck =
+      req.method === "GET" && HEALTH_CHECK_PATH.test(req.path);
+    if (isHealthCheck) return next();
+
     if (BLOCKED_UA.test(userAgent)) {
       sendAlert(`BLOCK: Ferramenta barrada.\nIP: ${req.ip}`);
       return res.status(403).json({ message: "Acesso bloqueado." });

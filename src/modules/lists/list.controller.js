@@ -4,7 +4,14 @@ const tmdbApi = require("../tmdb/tmdb.client");
 const { containsProfanity } = require("../../shared/utils/profanity");
 const catchAsync = require("../../shared/utils/catchAsync");
 const AppError = require("../../shared/errors/AppError");
-const { deleteByPrefix } = require("../../shared/cache/cache.service");
+const { del, remember } = require("../../shared/cache/cache.service");
+const { userListsKey } = require("../../shared/cache/cache.keys");
+const { invalidateFeedCache } = require("../social/feedCache.service");
+
+const PERSONAL_LISTS_CACHE_TTL_SECONDS = 300;
+
+const invalidateUserListsCache = (userId) =>
+  userId ? del(userListsKey(userId)) : Promise.resolve();
 
 const getSharedListPostsSnapshot = (uid, listId) =>
   db
@@ -31,7 +38,7 @@ const deleteSharedListPosts = async (uid, listId) => {
   const batch = db.batch();
   snapshot.docs.forEach((doc) => batch.delete(doc.ref));
   await batch.commit();
-  await deleteByPrefix("feed:");
+  await invalidateFeedCache();
   return true;
 };
 
@@ -47,7 +54,7 @@ const syncSharedListPosts = async (uid, listId, listData = {}) => {
   const batch = db.batch();
   snapshot.docs.forEach((doc) => batch.update(doc.ref, update));
   await batch.commit();
-  await deleteByPrefix("feed:");
+  await invalidateFeedCache();
   return true;
 };
 
@@ -173,6 +180,7 @@ exports.upsertList = catchAsync(async (req, res, next) => {
     await syncSharedListPosts(uid, id, updatedDoc.data() || listData);
   }
 
+  await invalidateUserListsCache(uid);
   res.status(200).json({ message: "Lista salva.", listId: id });
 });
 
@@ -232,6 +240,10 @@ exports.cloneList = catchAsync(async (req, res, next) => {
   });
   await batch.commit();
 
+  await Promise.all([
+    invalidateUserListsCache(uid),
+    invalidateUserListsCache(ownerId),
+  ]);
   res.status(200).json({ message: "Lista salva na sua coleção!", newListId });
 });
 
@@ -282,6 +294,7 @@ exports.addMediaToList = catchAsync(async (req, res, next) => {
       items: updatedItems,
       updatedAt: new Date(),
     });
+    await invalidateUserListsCache(uid);
   }
   res.status(200).json({ message: "Adicionado." });
 });
@@ -311,28 +324,38 @@ exports.getUserLists = catchAsync(async (req, res, next) => {
   let query = db.collection("users").doc(targetUid).collection("lists");
   if (!isOwner) query = query.where("isPublic", "==", true);
 
-  const snapshot = await query.get();
-  let lists = await Promise.all(snapshot.docs.map(async (doc) => {
-    const data = doc.data();
-    const items = await enrichItemsIfNeeded(doc.ref, data.items || []);
+  const loadLists = async () => {
+    const snapshot = await query.get();
+    const lists = await Promise.all(snapshot.docs.map(async (doc) => {
+      const data = doc.data();
+      const items = await enrichItemsIfNeeded(doc.ref, data.items || []);
 
-    return {
-      id: doc.id,
-      name: data.name,
-      description: data.description || "",
-      items,
-      savesCount: data.savesCount || 0,
-      isPublic: data.isPublic,
-      createdAt: data.createdAt?.toDate
-        ? data.createdAt.toDate()
-        : data.createdAt,
-      updatedAt: data.updatedAt?.toDate
-        ? data.updatedAt.toDate()
-        : data.updatedAt,
-    };
-  }));
+      return {
+        id: doc.id,
+        name: data.name,
+        description: data.description || "",
+        items,
+        savesCount: data.savesCount || 0,
+        isPublic: data.isPublic,
+        createdAt: data.createdAt?.toDate
+          ? data.createdAt.toDate()
+          : data.createdAt,
+        updatedAt: data.updatedAt?.toDate
+          ? data.updatedAt.toDate()
+          : data.updatedAt,
+      };
+    }));
 
-  lists.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    lists.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    return lists;
+  };
+  const lists = isOwner
+    ? await remember(
+        userListsKey(targetUid),
+        PERSONAL_LISTS_CACHE_TTL_SECONDS,
+        loadLists,
+      )
+    : await loadLists();
   res.status(200).json(lists);
 });
 
@@ -415,6 +438,7 @@ exports.deleteList = catchAsync(async (req, res, next) => {
 
   await ref.delete();
   await deleteSharedListPosts(uid, listId);
+  await invalidateUserListsCache(uid);
   res.status(200).json({ message: "Lista deletada." });
 });
 
@@ -440,6 +464,7 @@ exports.removeMediaFromList = catchAsync(async (req, res, next) => {
     items: updatedItems,
     updatedAt: new Date(),
   });
+  await invalidateUserListsCache(uid);
   res.status(200).json({ message: "Removido." });
 });
 
@@ -502,7 +527,7 @@ exports.shareList = catchAsync(async (req, res, next) => {
     });
     sharedListId = docRef.id;
   }
-  await deleteByPrefix("feed:");
+  await invalidateFeedCache();
   const docRef = { id: sharedListId };
   res
     .status(existingShare ? 200 : 201)

@@ -14,6 +14,7 @@ const {
   userSpamDetector,
 } = require("./shared/middleware/security");
 const registerRoutes = require("./routes");
+const requestTelemetry = require("./shared/middleware/requestTelemetry");
 
 const createApp = () => {
   const app = express();
@@ -40,6 +41,7 @@ const createApp = () => {
   app.use(cors(corsOptions));
   app.use(express.json({ limit: "10kb" }));
   app.use(cookieParser());
+  app.use(requestTelemetry);
 
   app.use(shield);
   app.use(protectStateChangingRequests);
