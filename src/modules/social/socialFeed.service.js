@@ -1,3 +1,5 @@
+const logger = require("../../shared/utils/logger");
+
 const safeUsername = (val) => (val && val.trim()) ? val.trim() : null;
 
 function getSharedListPreview(data = {}) {
@@ -31,7 +33,12 @@ async function resolveUsernamesFallback(db, docs, getDataFn) {
               userPhoto: userData.photoURL || null,
             };
           }
-        } catch {}
+        } catch (error) {
+          logger.warn("social_username_fallback_failed", {
+            userId,
+            message: error?.message || "unknown",
+          });
+        }
       })
     );
   }

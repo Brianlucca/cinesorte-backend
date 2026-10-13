@@ -8,16 +8,20 @@ const {
   parseCursor,
   buildCursorFromItems,
 } = require("./socialFeed.service");
-const { remember } = require("../../shared/cache/cache.service");
-const { feedKey } = require("../../shared/cache/cache.keys");
+const { rememberLocal } = require("../../shared/cache/cache.service");
+const { feedKey, publicFeedKey } = require("../../shared/cache/cache.keys");
 const { getLikedReviewIds } = require("./reviewLikeState.service");
 
 const FEED_PAGE_SIZE = 20;
 
-function buildReviewItems(docs, likedIds, uid, userCache) {
+function buildPublicReviewItems(docs, userCache) {
   return docs.map((doc) => {
     const data = doc.data();
     const fallback = userCache[data.userId] || {};
+    const ownerUsername =
+      safeUsername(data.username) ||
+      safeUsername(fallback.username) ||
+      "Usuário";
 
     return {
       id: doc.id,
@@ -31,37 +35,40 @@ function buildReviewItems(docs, likedIds, uid, userCache) {
       likesCount: data.likesCount || 0,
       commentsCount: data.commentsCount || 0,
       createdAt: data.createdAt,
-      username: safeUsername(data.username) || safeUsername(fallback.username) || "Usuário",
+      username: ownerUsername,
       userPhoto: data.userPhoto || fallback.userPhoto || null,
       levelTitle: data.levelTitle || null,
       isEliteReview: data.isEliteReview || false,
       isEdited: data.isEdited || false,
-      isLikedByCurrentUser: likedIds.has(doc.id),
-      isOwner: uid ? data.userId === uid : false,
       replies: [],
       type: "review",
+      _ownerUsername: ownerUsername,
     };
   });
 }
 
-async function fetchLikedIds(reviewDocs, uid) {
-  const reviewIds = reviewDocs.map((doc) => doc.id);
-  return getLikedReviewIds(uid, reviewIds);
+async function personalizeReviewItems(items, user) {
+  const reviewIds = items.map((item) => item.id);
+  const likedIds = await getLikedReviewIds(user.uid, reviewIds);
+  return items.map(({ _ownerUsername, ...item }) => ({
+    ...item,
+    isLikedByCurrentUser: likedIds.has(item.id),
+    isOwner: Boolean(user.username && _ownerUsername === user.username),
+  }));
 }
 
 exports.getGlobalFeed = catchAsync(async (req, res, next) => {
-  const { uid } = req.user || {};
+  const { uid } = req.user;
   const cursorDate = parseCursor(req.query.cursor);
-  const cacheKey = feedKey("global", uid, req.query.cursor);
+  const cursor = req.query.cursor || "first";
 
-  const payload = await remember(cacheKey, 15, async () => {
+  const publicPayload = await rememberLocal(publicFeedKey("global", cursor), 300, async () => {
     let query = db.collection("reviews").orderBy("createdAt", "desc").limit(FEED_PAGE_SIZE);
     if (cursorDate) query = query.startAfter(cursorDate);
 
     const snapshot = await query.get();
-    const likedIds = await fetchLikedIds(snapshot.docs, uid);
     const userCache = await resolveUsernamesFallback(db, snapshot.docs, (doc) => doc.data());
-    const items = buildReviewItems(snapshot.docs, likedIds, uid, userCache);
+    const items = buildPublicReviewItems(snapshot.docs, userCache);
 
     return {
       items,
@@ -69,6 +76,10 @@ exports.getGlobalFeed = catchAsync(async (req, res, next) => {
       nextCursor: buildCursorFromItems(items),
     };
   });
+  const payload = await rememberLocal(feedKey("global", uid, cursor), 300, async () => ({
+    ...publicPayload,
+    items: await personalizeReviewItems(publicPayload.items, req.user),
+  }));
 
   res.status(200).json(payload);
 });
@@ -78,7 +89,7 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
   const cursorDate = parseCursor(req.query.cursor);
   const cacheKey = feedKey("following", uid, req.query.cursor);
 
-  const payload = await remember(cacheKey, 15, async () => {
+  const payload = await rememberLocal(cacheKey, 300, async () => {
     const followingSnap = await db
       .collection("users")
       .doc(uid)
@@ -120,11 +131,11 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
       listsQuery.get(),
     ]);
 
-    const likedIds = await fetchLikedIds(reviewsSnapshot.docs, uid);
     const reviewUserCache = await resolveUsernamesFallback(db, reviewsSnapshot.docs, (doc) => doc.data());
     const listUserCache = await resolveUsernamesFallback(db, listsSnapshot.docs, (doc) => doc.data());
 
-    const reviews = buildReviewItems(reviewsSnapshot.docs, likedIds, uid, reviewUserCache);
+    const publicReviews = buildPublicReviewItems(reviewsSnapshot.docs, reviewUserCache);
+    const reviews = await personalizeReviewItems(publicReviews, req.user);
     const sharedLists = listsSnapshot.docs.map((doc) => {
       const data = doc.data();
       const fallback = listUserCache[data.userId] || {};
@@ -167,8 +178,8 @@ exports.getFollowingFeed = catchAsync(async (req, res, next) => {
 
 exports.getSharedListsFeed = catchAsync(async (req, res, next) => {
   const cursorDate = parseCursor(req.query.cursor);
-  const cacheKey = feedKey("collections", req.user?.uid, req.query.cursor);
-  const payload = await remember(cacheKey, 20, async () => {
+  const cacheKey = publicFeedKey("collections", req.query.cursor);
+  const payload = await rememberLocal(cacheKey, 300, async () => {
     let query = db
       .collection("shared_lists")
       .orderBy("createdAt", "desc")

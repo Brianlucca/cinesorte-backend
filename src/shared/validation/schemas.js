@@ -138,11 +138,6 @@ const addToListSchema = z.object({
   }),
 });
 
-const supportTicketSchema = z.object({
-  subject: z.enum(['SUGESTAO', 'BUG_REPORT', 'PROBLEMA_CONTA', 'DENUNCIA', 'OUTRO_ASSUNTO']),
-  message: z.string().trim().min(10, 'A mensagem deve ter pelo menos 10 caracteres.').max(1000, 'A mensagem pode ter no máximo 1000 caracteres.'),
-});
-
 const messageMediaSchema = z.object({
   id: z.union([z.string(), z.number()]),
   mediaId: z.union([z.string(), z.number()]).optional(),
@@ -214,7 +209,6 @@ module.exports = {
   commentUpdateSchema,
   listSchema,
   addToListSchema,
-  supportTicketSchema,
   createDirectConversationSchema,
   createGroupConversationSchema,
   sendMessageSchema,

@@ -1,7 +1,9 @@
 const tmdbApi = require("./tmdb.client");
 const { db } = require("../../config/firebase");
 const catchAsync = require("../../shared/utils/catchAsync");
-const { remember } = require("../../shared/cache/cache.service");
+const logger = require("../../shared/utils/logger");
+const { rememberLocal } = require("../../shared/cache/cache.service");
+const { personalizedRecommendationsKey } = require("../../shared/cache/cache.keys");
 
 const tmdbCacheKey = (scope, params = {}) => {
   const normalized = Object.entries(params)
@@ -11,10 +13,16 @@ const tmdbCacheKey = (scope, params = {}) => {
 };
 
 const rememberTmdb = (scope, params, ttlSeconds, factory) =>
-  remember(tmdbCacheKey(scope, params), ttlSeconds, factory);
+  rememberLocal(tmdbCacheKey(scope, params), ttlSeconds, factory);
 
-const DETAILS_CACHE_TTL_SECONDS = Number(
-  process.env.TMDB_DETAILS_CACHE_TTL_SECONDS || 21600,
+const getShortCacheTtl = (value) => {
+  const configuredTtl = Number(value);
+  return Number.isFinite(configuredTtl) && configuredTtl > 0
+    ? Math.min(configuredTtl, 300)
+    : 300;
+};
+const DETAILS_CACHE_TTL_SECONDS = getShortCacheTtl(
+  process.env.TMDB_DETAILS_CACHE_TTL_SECONDS,
 );
 const DETAILS_PREWARM_LIMIT = Math.max(
   0,
@@ -28,8 +36,8 @@ const RECOMMENDATION_SEED_LIMIT = Math.max(
   1,
   Number(process.env.TMDB_RECOMMENDATION_SEED_LIMIT || 4),
 );
-const RECOMMENDATION_SEED_CACHE_TTL_SECONDS = Number(
-  process.env.TMDB_RECOMMENDATION_SEED_CACHE_TTL_SECONDS || 21600,
+const RECOMMENDATION_SEED_CACHE_TTL_SECONDS = getShortCacheTtl(
+  process.env.TMDB_RECOMMENDATION_SEED_CACHE_TTL_SECONDS,
 );
 const RELATED_ITEMS_PER_SEED = 12;
 const detailsPrewarmQueue = [];
@@ -79,7 +87,13 @@ const drainDetailsPrewarmQueue = () => {
     activeDetailsPrewarms += 1;
 
     getCachedMediaDetails(task.mediaType, task.id)
-      .catch(() => {})
+      .catch((error) => {
+        logger.warn("tmdb_details_prewarm_failed", {
+          mediaType: task.mediaType,
+          mediaId: task.id,
+          message: error?.message || "unknown",
+        });
+      })
       .finally(() => {
         activeDetailsPrewarms -= 1;
         queuedDetails.delete(task.key);
@@ -327,70 +341,76 @@ exports.getRecommendations = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
   const { mediaType } = req.params;
   const page = req.query.page || 1;
-  const [userDoc, interactionsSnap] = await Promise.all([
-    db.collection("users").doc(uid).get(),
-    db
-      .collection("interactions")
-      .where("userId", "==", uid)
-      .select(
-        "mediaId",
-        "mediaType",
-        "liked",
-        "disliked",
-        "watched",
-        "likedAt",
-        "watchedAt",
-        "lastInteraction",
-      )
-      .get(),
-  ]);
-  const genreCounts = userDoc.exists ? userDoc.data().genreCounts || {} : {};
-  const preferredGenreIds = getPreferredGenreIds(genreCounts);
-  const interactions = interactionsSnap.docs.map((doc) => doc.data());
+  const results = await rememberLocal(
+    personalizedRecommendationsKey(uid, mediaType, page),
+    300,
+    async () => {
+      const [userDoc, interactionsSnap] = await Promise.all([
+        db.collection("users").doc(uid).get(),
+        db
+          .collection("interactions")
+          .where("userId", "==", uid)
+          .select(
+            "mediaId",
+            "mediaType",
+            "liked",
+            "disliked",
+            "watched",
+            "likedAt",
+            "watchedAt",
+            "lastInteraction",
+          )
+          .get(),
+      ]);
+      const genreCounts = userDoc.exists ? userDoc.data().genreCounts || {} : {};
+      const preferredGenreIds = getPreferredGenreIds(genreCounts);
+      const interactions = interactionsSnap.docs.map((doc) => doc.data());
 
-  const discoverRequests = preferredGenreIds.length > 0
-    ? preferredGenreIds.map((genreId) =>
-        tmdbApi.get(`/discover/${mediaType}`, {
-          params: {
-            page,
-            language: "pt-BR",
-            sort_by: "popularity.desc",
-            include_adult: false,
-            "vote_count.gte": 50,
-            with_genres: genreId,
-          },
-        }),
-      )
-    : [
-        tmdbApi.get(`/discover/${mediaType}`, {
-          params: {
-            page,
-            language: "pt-BR",
-            sort_by: "popularity.desc",
-            include_adult: false,
-            "vote_count.gte": 50,
-          },
-        }),
-      ];
+      const discoverRequests = preferredGenreIds.length > 0
+        ? preferredGenreIds.map((genreId) =>
+            tmdbApi.get(`/discover/${mediaType}`, {
+              params: {
+                page,
+                language: "pt-BR",
+                sort_by: "popularity.desc",
+                include_adult: false,
+                "vote_count.gte": 50,
+                with_genres: genreId,
+              },
+            }),
+          )
+        : [
+            tmdbApi.get(`/discover/${mediaType}`, {
+              params: {
+                page,
+                language: "pt-BR",
+                sort_by: "popularity.desc",
+                include_adult: false,
+                "vote_count.gte": 50,
+              },
+            }),
+          ];
 
-  const [responses, seedRecommendations] = await Promise.all([
-    Promise.all(discoverRequests),
-    getSeedRecommendations(interactions, mediaType),
-  ]);
-  const recommendedItems = mergeUniqueItems(
-    seedRecommendations.items,
-    ...responses.map((response) => response.data?.results || []),
-  );
-  const seenIds = new Set(interactions.map((interaction) => String(interaction.mediaId)));
-  const filtered = recommendedItems.filter(
-    (i) => !seenIds.has(i.id.toString()),
-  );
-  const results = scoreItemsByGenres(
-    filtered,
-    genreCounts,
-    preferredGenreIds,
-    uid,
-    seedRecommendations.affinityScores,
+      const [responses, seedRecommendations] = await Promise.all([
+        Promise.all(discoverRequests),
+        getSeedRecommendations(interactions, mediaType),
+      ]);
+      const recommendedItems = mergeUniqueItems(
+        seedRecommendations.items,
+        ...responses.map((response) => response.data?.results || []),
+      );
+      const seenIds = new Set(interactions.map((interaction) => String(interaction.mediaId)));
+      const filtered = recommendedItems.filter(
+        (item) => !seenIds.has(item.id.toString()),
+      );
+      return scoreItemsByGenres(
+        filtered,
+        genreCounts,
+        preferredGenreIds,
+        uid,
+        seedRecommendations.affinityScores,
+      );
+    },
   );
   res.status(200).json(results);
   prewarmMediaDetails(results, mediaType);
@@ -522,7 +542,7 @@ exports.getGenres = catchAsync(async (req, res, next) => {
 exports.getDetails = catchAsync(async (req, res, next) => {
   const { mediaType, id } = req.params;
   const details = await getCachedMediaDetails(mediaType, id);
-  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=21600");
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=300");
   res.status(200).json(details);
 });
 

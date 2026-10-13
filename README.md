@@ -4,7 +4,7 @@
 
 **The API and real-time infrastructure behind the CineSorte social entertainment platform.**
 
-This service powers authentication, discovery, profiles, social interactions, messaging, watch progress, notifications, support workflows, and synchronized watch parties for CineSorte.
+This service powers authentication, discovery, profiles, social interactions, messaging, watch progress, notifications, and synchronized watch parties for CineSorte.
 
 [Live application](https://cinesorte.vercel.app/) · [Frontend repository](https://github.com/Brianlucca/cinesorte) · [Portfolio](https://brianlucca.vercel.app/)
 
@@ -28,7 +28,7 @@ The backend is responsible for more than catalog data. It manages user identity 
 | **Messaging** | Direct and group conversations, membership controls, media attachments, unread state, conversation streams, and per-user visibility. |
 | **Watch progress** | Progress history, CineSorte Sync pairing codes, revocable extension tokens, connected-device status, and stale-session cleanup. |
 | **Watch parties** | Persistent rooms, access policies, invite and relationship-based visibility, queues, host controls, ephemeral presence, chat, playback signals, screen-sharing negotiation, and live room previews. |
-| **Notifications and support** | Notification state, unread counters, support protocols, ticket history, administrative replies, and closure workflows. |
+| **Notifications** | Notification state and unread counters. |
 
 ## Real-time architecture
 
@@ -43,7 +43,7 @@ Watch-party chat and presence are intentionally ephemeral, while room configurat
 ## Data and infrastructure
 
 - **Firebase Authentication** provides identity verification and session-cookie validation.
-- **Cloud Firestore** stores users, profiles, lists, reviews, comments, social relationships, notifications, messages, support tickets, and viewing activity.
+- **Cloud Firestore** stores users, profiles, lists, reviews, comments, social relationships, notifications, messages, and viewing activity. Existing support-ticket records are retained, but their API and Telegram commands have been retired.
 - **Firebase Realtime Database** supports integrations that benefit from Firebase's real-time data layer.
 - **PostgreSQL** persists watch-party rooms, membership, access rules, queues, and related relational state.
 - **In-memory caching** reduces repeated requests for stable or frequently requested data, with bounded entries and domain-specific cache keys.
@@ -70,7 +70,7 @@ The service includes operational tooling beyond request handling:
 
 - Structured application logging with Winston.
 - Telegram alerts for suspicious traffic, brute-force attempts, rejected origins, resource pressure, and application events.
-- Telegram-based operational summaries and support-ticket management.
+- Telegram-based operational summaries.
 - Scheduled cleanup for expired extension sessions and account-deletion workflows.
 - Verification-email rescue processing for eligible accounts.
 - Database migrations for watch-party persistence and access rules.
@@ -93,7 +93,6 @@ src/
 │   ├── messages/              Conversations, streams, encryption, and membership
 │   ├── notifications/         User notification state
 │   ├── social/                Feed, relationships, reviews, comments, and likes
-│   ├── support/               Support delivery workflows
 │   ├── tmdb/                  Protected catalog client and endpoints
 │   ├── watchParty/            Rooms, persistence, services, and WebSocket gateway
 │   └── watchProgress/         Browser-extension pairing and playback progress

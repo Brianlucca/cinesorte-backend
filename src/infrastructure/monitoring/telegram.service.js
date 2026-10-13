@@ -140,10 +140,6 @@ const getHelpMessage = () =>
   buildPanelMessage("Comandos disponíveis", [
     "/today - atividade das últimas 24 horas",
     "/report - relatório completo sob demanda",
-    "/support - lista protocolos abertos",
-    "/ticket CS-AAAA - detalhes de um protocolo",
-    "/reply CS-AAAA mensagem - responde um chamado",
-    "/close CS-AAAA mensagem opcional - fecha um chamado",
     "/help - exibe esta ajuda",
   ]);
 
@@ -154,10 +150,6 @@ const setupBotCommands = async () => {
       commands: [
         { command: "today", description: "Atividade das últimas 24h" },
         { command: "report", description: "Relatório sob demanda" },
-        { command: "support", description: "Lista protocolos de suporte" },
-        { command: "ticket", description: "Detalhes de um protocolo" },
-        { command: "reply", description: "Responde um protocolo" },
-        { command: "close", description: "Fecha um protocolo" },
         { command: "help", description: "Lista de comandos" },
       ],
     });
@@ -180,15 +172,14 @@ const getSinceDate = (hours) => new Date(Date.now() - hours * 60 * 60 * 1000);
 const getGrowthMetrics = async () => {
   const since = getSinceDate(24);
 
-  const [newUsers, newReviews, newComments, newListShares, openSupportTickets] = await Promise.all([
+  const [newUsers, newReviews, newComments, newListShares] = await Promise.all([
     getCollectionCount("users", [{ field: "createdAt", operator: ">=", value: since }]),
     getCollectionCount("reviews", [{ field: "createdAt", operator: ">=", value: since }]),
     getCollectionCount("comments", [{ field: "createdAt", operator: ">=", value: since }]),
     getCollectionCount("shared_lists", [{ field: "createdAt", operator: ">=", value: since }]),
-    getCollectionCount("support_tickets", [{ field: "status", operator: "==", value: "open" }]),
   ]);
 
-  return { newUsers, newReviews, newComments, newListShares, openSupportTickets };
+  return { newUsers, newReviews, newComments, newListShares };
 };
 
 const getTotalMetrics = async () => {
@@ -246,7 +237,6 @@ const sendDailyReport = async () => {
     `- Novas reviews: ${growth?.newReviews ?? "-"}`,
     `- Novos comentários: ${growth?.newComments ?? "-"}`,
     `- Novos compartilhamentos de lista: ${growth?.newListShares ?? "-"}`,
-    `- Chamados abertos: ${growth?.openSupportTickets ?? "-"}`,
     "",
     `<b>Total acumulado</b>`,
     `- Usuários: ${totals?.totalUsers ?? "-"}`,
@@ -313,199 +303,6 @@ const getTopUsers = () => {
     .map(([user, data], index) => `${index + 1}. @${escapeHtml(user)} - ${data.count} req/min`);
 };
 
-const normalizeProtocol = (value) => String(value || "").trim().toUpperCase();
-
-const getSupportTicketByProtocol = async (protocol) => {
-  const snapshot = await db
-    .collection("support_tickets")
-    .where("protocol", "==", normalizeProtocol(protocol))
-    .limit(1)
-    .get();
-
-  if (snapshot.empty) return null;
-
-  const doc = snapshot.docs[0];
-  return { id: doc.id, ref: doc.ref, ...doc.data() };
-};
-
-
-const listOpenSupportTickets = async (limit = 8) => {
-  const snapshot = await db
-    .collection("support_tickets")
-    .where("status", "==", "open")
-    .limit(limit)
-    .get();
-
-  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-};
-
-const formatSupportTicketSummary = (ticket) => {
-  const createdAt = ticket.createdAt?.toDate ? getBahiaDateTime(ticket.createdAt.toDate()) : "data indisponível";
-  return `- <b>${escapeHtml(ticket.protocol)}</b> | ${escapeHtml(ticket.subjectLabel || ticket.subject || "Sem assunto")} | @${escapeHtml(ticket.username || "desconhecido")} | ${escapeHtml(createdAt)}\n`;
-};
-
-const normalizeTicketConversation = (ticket) => {
-  if (Array.isArray(ticket.conversation) && ticket.conversation.length > 0) {
-    return [...ticket.conversation].sort((a, b) => {
-      const first = a?.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a?.createdAt || 0).getTime();
-      const second = b?.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b?.createdAt || 0).getTime();
-      return first - second;
-    });
-  }
-
-  const fallback = [];
-  if (ticket.message) {
-    fallback.push({
-      id: `${ticket.protocol}_user`,
-      role: "user",
-      author: ticket.username || "usuário",
-      message: ticket.message,
-      createdAt: ticket.createdAt,
-    });
-  }
-  if (ticket.adminResponse) {
-    fallback.push({
-      id: `${ticket.protocol}_reply`,
-      role: "admin",
-      author: "Equipe CineSorte",
-      message: ticket.adminResponse,
-      createdAt: ticket.adminRespondedAt || ticket.updatedAt,
-    });
-  }
-  if (ticket.resolutionNote) {
-    fallback.push({
-      id: `${ticket.protocol}_close`,
-      role: "admin",
-      author: "Equipe CineSorte",
-      message: ticket.resolutionNote,
-      createdAt: ticket.closedAt || ticket.updatedAt,
-      isResolution: true,
-    });
-  }
-
-  return fallback;
-};
-
-const formatSupportTicketDetails = (ticket) => {
-  const createdAt = ticket.createdAt?.toDate ? getBahiaDateTime(ticket.createdAt.toDate()) : "data indisponível";
-  const updatedAt = ticket.updatedAt?.toDate ? getBahiaDateTime(ticket.updatedAt.toDate()) : "data indisponível";
-  const closedAt = ticket.closedAt?.toDate ? getBahiaDateTime(ticket.closedAt.toDate()) : null;
-
-  const lines = [
-    `- Protocolo: <b>${escapeHtml(ticket.protocol)}</b>`,
-    `- Status: ${escapeHtml(ticket.status || "open")}`,
-    `- Assunto: ${escapeHtml(ticket.subjectLabel || ticket.subject || "Sem assunto")}`,
-    `- Usuário: @${escapeHtml(ticket.username || "desconhecido")}`,
-    `- Email: ${escapeHtml(ticket.email || "não informado")}`,
-    `- Criado em: ${escapeHtml(createdAt)}`,
-    `- Atualizado em: ${escapeHtml(updatedAt)}`,
-  ];
-
-  if (closedAt) lines.push(`- Fechado em: ${escapeHtml(closedAt)}`);
-  if (ticket.closedBy) lines.push(`- Fechado por: ${escapeHtml(ticket.closedBy)}`);
-
-  const conversation = normalizeTicketConversation(ticket);
-  lines.push("", `<b>Histórico</b>`);
-
-  if (!conversation.length) {
-    lines.push("Sem mensagens registradas.");
-    return lines;
-  }
-
-  conversation.forEach((entry, index) => {
-    const entryDate = entry?.createdAt?.toDate
-      ? getBahiaDateTime(entry.createdAt.toDate())
-      : entry?.createdAt
-        ? getBahiaDateTime(new Date(entry.createdAt))
-        : "data indisponível";
-    const label = entry.isResolution ? "Encerramento" : entry.role === "admin" ? "Equipe" : "Usuário";
-    lines.push("");
-    lines.push(`${index + 1}. <b>${escapeHtml(label)}</b> - ${escapeHtml(entryDate)}`);
-    lines.push(escapeHtml(entry.message || "Sem mensagem."));
-  });
-
-  return lines;
-};
-
-const closeSupportTicket = async (protocol, reason) => {
-  const ticket = await getSupportTicketByProtocol(protocol);
-  if (!ticket) return { found: false };
-  if (ticket.status === "closed") return { found: true, alreadyClosed: true, ticket };
-
-  const now = admin.firestore.Timestamp.now();
-  const resolutionNote = reason || "Seu chamado foi analisado e finalizado pela equipe do CineSorte.";
-  const resolutionEntry = {
-    id: `close_${now.toMillis()}`,
-    role: "admin",
-    author: "Equipe CineSorte",
-    channel: "telegram",
-    message: resolutionNote,
-    createdAt: now,
-    isResolution: true,
-  };
-
-  await ticket.ref.update({
-    status: "closed",
-    updatedAt: now,
-    closedAt: now,
-    closedBy: "equipe_cinesorte",
-    resolutionNote,
-    conversation: admin.firestore.FieldValue.arrayUnion(resolutionEntry),
-  });
-
-  return {
-    found: true,
-    alreadyClosed: false,
-    ticket: {
-      ...ticket,
-      status: "closed",
-      updatedAt: now,
-      closedAt: now,
-      closedBy: "equipe_cinesorte",
-      resolutionNote,
-      conversation: [...(ticket.conversation || []), resolutionEntry],
-    },
-  };
-};
-
-const replySupportTicket = async (protocol, responseText) => {
-  const ticket = await getSupportTicketByProtocol(protocol);
-  if (!ticket) return { found: false };
-  if (!responseText) return { found: true, missingResponse: true, ticket };
-
-  const now = admin.firestore.Timestamp.now();
-  const adminEntry = {
-    id: `reply_${now.toMillis()}`,
-    role: "admin",
-    author: "Equipe CineSorte",
-    channel: "telegram",
-    message: responseText,
-    createdAt: now,
-  };
-
-  await ticket.ref.update({
-    status: ticket.status === "closed" ? "closed" : "answered",
-    updatedAt: now,
-    adminResponse: responseText,
-    adminRespondedAt: now,
-    adminRespondedBy: "equipe_cinesorte",
-    conversation: admin.firestore.FieldValue.arrayUnion(adminEntry),
-  });
-
-  return {
-    found: true,
-    missingResponse: false,
-    ticket: {
-      ...ticket,
-      status: ticket.status === "closed" ? "closed" : "answered",
-      updatedAt: now,
-      adminResponse: responseText,
-      adminRespondedAt: now,
-      adminRespondedBy: "equipe_cinesorte",
-      conversation: [...(ticket.conversation || []), adminEntry],
-    },
-  };
-};
 const handleTelegramCommand = async (msg, chatId) => {
   if (String(chatId) !== TELEGRAM_CHAT_ID || !msg) return;
 
@@ -531,7 +328,6 @@ const handleTelegramCommand = async (msg, chatId) => {
         `- Novas reviews: ${growth.newReviews}`,
         `- Novos comentários: ${growth.newComments}`,
         `- Novos compartilhamentos de lista: ${growth.newListShares}`,
-        `- Chamados abertos: ${growth.openSupportTickets}`,
       ]));
     } catch (error) {
       logger.error("Telegram today failed: %s", error.message || error);
@@ -545,118 +341,6 @@ const handleTelegramCommand = async (msg, chatId) => {
     return;
   }
 
-
-
-  if (command === "/support") {
-    try {
-      const openTickets = await listOpenSupportTickets(8);
-      const lines = [`- Chamados abertos no momento: ${openTickets.length}`];
-
-      if (openTickets.length) {
-        lines.push("", `<b>Protocolos recentes</b>`);
-        openTickets.forEach((ticket) => lines.push(formatSupportTicketSummary(ticket)));
-        lines.push("", "Use /ticket PROTOCOLO para ver detalhes.");
-      } else {
-        lines.push("", "Nenhum chamado aberto no momento.");
-      }
-
-      await sendTelegramMessage(buildPanelMessage("Suporte", lines));
-    } catch (error) {
-      logger.error("Telegram support failed: %s", error.message || error);
-      await sendTelegramMessage(buildPanelMessage("Falha", ["Não foi possível consultar os chamados de suporte."]));
-    }
-    return;
-  }
-
-  if (command === "/ticket") {
-    const protocol = normalizeProtocol(args[0]);
-    if (!protocol) {
-      await sendTelegramMessage(buildPanelMessage("Uso do comando", ["Use /ticket CS-AAAA para ver os detalhes do chamado."]));
-      return;
-    }
-
-    try {
-      const ticket = await getSupportTicketByProtocol(protocol);
-      if (!ticket) {
-        await sendTelegramMessage(buildPanelMessage("Chamado não encontrado", [`- Protocolo: ${escapeHtml(protocol)}`]));
-        return;
-      }
-
-      await sendTelegramMessage(buildPanelMessage(`Chamado ${ticket.protocol}`, formatSupportTicketDetails(ticket)));
-    } catch (error) {
-      logger.error("Telegram ticket failed: %s", error.message || error);
-      await sendTelegramMessage(buildPanelMessage("Falha", ["Não foi possível consultar esse protocolo."]));
-    }
-    return;
-  }
-
-  if (command === "/reply") {
-    const protocol = normalizeProtocol(args[0]);
-    const responseText = args.slice(1).join(" ").trim();
-
-    if (!protocol || !responseText) {
-      await sendTelegramMessage(buildPanelMessage("Uso do comando", ["Use /reply CS-AAAA mensagem para responder um chamado."]));
-      return;
-    }
-
-    try {
-      const result = await replySupportTicket(protocol, responseText);
-      if (!result.found) {
-        await sendTelegramMessage(buildPanelMessage("Chamado não encontrado", [`- Protocolo: ${escapeHtml(protocol)}`]));
-        return;
-      }
-
-      if (result.missingResponse) {
-        await sendTelegramMessage(buildPanelMessage("Resposta ausente", ["Envie uma mensagem após o protocolo para responder ao chamado."]));
-        return;
-      }
-
-      await sendTelegramMessage(buildPanelMessage("Resposta enviada", [
-        `- Protocolo: <b>${escapeHtml(result.ticket.protocol)}</b>`,
-        `- Status atual: ${escapeHtml(result.ticket.status)}`,
-        `- Resposta: ${escapeHtml(result.ticket.adminResponse)}`,
-      ]));
-    } catch (error) {
-      logger.error("Telegram reply ticket failed: %s", error.message || error);
-      await sendTelegramMessage(buildPanelMessage("Falha", ["Não foi possível responder esse chamado."]));
-    }
-    return;
-  }
-  if (command === "/close") {
-    const protocol = normalizeProtocol(args[0]);
-    const reason = args.slice(1).join(" ").trim();
-
-    if (!protocol) {
-      await sendTelegramMessage(buildPanelMessage("Uso do comando", ["Use /close CS-AAAA mensagem opcional de encerramento para fechar um chamado."]));
-      return;
-    }
-
-    try {
-      const result = await closeSupportTicket(protocol, reason);
-      if (!result.found) {
-        await sendTelegramMessage(buildPanelMessage("Chamado não encontrado", [`- Protocolo: ${escapeHtml(protocol)}`]));
-        return;
-      }
-
-      if (result.alreadyClosed) {
-        await sendTelegramMessage(buildPanelMessage("Chamado já fechado", [
-          `- Protocolo: <b>${escapeHtml(result.ticket.protocol)}</b>`,
-          `- Status atual: ${escapeHtml(result.ticket.status || "closed")}`,
-        ]));
-        return;
-      }
-
-      await sendTelegramMessage(buildPanelMessage("Chamado finalizado", [
-        `- Protocolo: <b>${escapeHtml(result.ticket.protocol)}</b>`,
-        `- Novo status: ${escapeHtml(result.ticket.status)}`,
-        `- Resolução: ${escapeHtml(result.ticket.resolutionNote || "Seu chamado foi analisado e finalizado pela equipe do CineSorte.")}`,
-      ]));
-    } catch (error) {
-      logger.error("Telegram close ticket failed: %s", error.message || error);
-      await sendTelegramMessage(buildPanelMessage("Falha", ["Não foi possível fechar esse chamado."]));
-    }
-    return;
-  }
 
 
   await sendTelegramMessage(buildPanelMessage("Comando não reconhecido", [

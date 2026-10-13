@@ -1,10 +1,12 @@
 const admin = require("firebase-admin");
 
 const { db } = require("../../config/firebase");
-const { deleteByPrefix } = require("../../shared/cache/cache.service");
+const { deleteLocalByPrefix } = require("../../shared/cache/cache.service");
 const AppError = require("../../shared/errors/AppError");
 const catchAsync = require("../../shared/utils/catchAsync");
+const logger = require("../../shared/utils/logger");
 const { checkTrophies } = require("../../shared/utils/gamification");
+const { invalidateNotificationCache } = require("../notifications/notificationCache.service");
 
 async function getUidByUsername(username) {
   if (!username) throw new AppError("Usuário não especificado.", 400);
@@ -96,7 +98,12 @@ async function getLikedMediaIdsForUser(userId) {
   const likedMediaIds = likesSnapshot.docs.map((doc) => doc.data().mediaId).filter(Boolean);
 
   if (likedMediaIds.length > 0) {
-    await db.collection("users").doc(userId).set({ likedMediaIds }, { merge: true }).catch(() => {});
+    await db.collection("users").doc(userId).set({ likedMediaIds }, { merge: true }).catch((error) => {
+      logger.warn("liked_media_migration_failed", {
+        userId,
+        message: error?.message || "unknown",
+      });
+    });
   }
 
   return likedMediaIds;
@@ -169,8 +176,8 @@ exports.followUser = catchAsync(async (req, res, next) => {
     }
   });
 
-  await deleteByPrefix("feed:");
-  await deleteByPrefix("notifications:");
+  await deleteLocalByPrefix("feed:");
+  await invalidateNotificationCache(targetUserId);
 
 
   res.status(200).json({ message: "Seguindo." });
@@ -192,7 +199,7 @@ exports.unfollowUser = catchAsync(async (req, res, next) => {
   });
   await batch.commit();
 
-  await deleteByPrefix("feed:");
+  await deleteLocalByPrefix("feed:");
   res.status(200).json({ message: "Deixou de seguir." });
 });
 
@@ -254,7 +261,7 @@ exports.blockUser = catchAsync(async (req, res, next) => {
     }
   });
 
-  await deleteByPrefix("feed:");
+  await deleteLocalByPrefix("feed:");
   res.status(200).json({ blocked: true });
 });
 

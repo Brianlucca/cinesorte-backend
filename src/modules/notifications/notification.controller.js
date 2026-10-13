@@ -1,12 +1,14 @@
 const { db } = require("../../config/firebase");
 const catchAsync = require("../../shared/utils/catchAsync");
-const { remember, del } = require("../../shared/cache/cache.service");
+const { rememberLocal } = require("../../shared/cache/cache.service");
 const { notificationsCountKey, notificationsListKey } = require("../../shared/cache/cache.keys");
 const messageService = require("../messages/message.service");
+const { invalidateNotificationCache } = require("./notificationCache.service");
+const NOTIFICATION_CACHE_TTL_SECONDS = 3600;
 
 exports.getNotifications = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
-  const firestorePromise = remember(notificationsListKey(uid), 10, async () => {
+  const firestorePromise = rememberLocal(notificationsListKey(uid), NOTIFICATION_CACHE_TTL_SECONDS, async () => {
     const snapshot = await db
       .collection("notifications")
       .where("recipientId", "==", uid)
@@ -67,8 +69,7 @@ exports.markAsRead = catchAsync(async (req, res, next) => {
 
   if (doc.exists && doc.data().recipientId === uid) {
     await notifRef.delete();
-    await del(notificationsListKey(uid));
-    await del(notificationsCountKey(uid));
+    await invalidateNotificationCache(uid);
   }
   res.status(200).json({ message: "Lida." });
 });
@@ -88,16 +89,13 @@ exports.deleteRead = catchAsync(async (req, res) => {
     await batch.commit();
   }
 
-  await Promise.all([
-    del(notificationsListKey(uid)),
-    del(notificationsCountKey(uid)),
-  ]);
+  await invalidateNotificationCache(uid);
   res.status(200).json({ deleted: readDocs.length });
 });
 
 exports.getUnreadCount = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
-  const notificationCount = await remember(notificationsCountKey(uid), 10, async () => {
+  const notificationCount = await rememberLocal(notificationsCountKey(uid), NOTIFICATION_CACHE_TTL_SECONDS, async () => {
     const query = db
       .collection("notifications")
       .where("recipientId", "==", uid)

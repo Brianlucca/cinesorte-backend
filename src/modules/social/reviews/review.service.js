@@ -16,11 +16,39 @@ const {
   getCreatedAtMillis,
 } = require("../socialFeed.service");
 const { getLikedReviewIds, setLikeState } = require("../reviewLikeState.service");
-const { deleteByPrefix } = require("../../../shared/cache/cache.service");
+const {
+  rememberLocal,
+  delLocal,
+  deleteLocalByPrefix,
+} = require("../../../shared/cache/cache.service");
+const {
+  mediaReviewsKey,
+  reviewCommentsKey,
+} = require("../../../shared/cache/cache.keys");
+const logger = require("../../../shared/utils/logger");
 const { markRatedReviewAsWatched } = require("../../interactions/ratedReviewWatch.service");
+const { invalidateNotificationCache } = require("../../notifications/notificationCache.service");
+const { invalidateFeedCache } = require("../feedCache.service");
 
 const MAX_MENTIONS_PER_TEXT = 5;
 const REVIEW_PAGE_SIZE = 20;
+const PUBLIC_REVIEW_CACHE_TTL_SECONDS = 300;
+
+const invalidatePublicReviewCache = async ({ mediaId, reviewId } = {}) => {
+  const invalidations = [];
+  if (mediaId) invalidations.push(delLocal(mediaReviewsKey(mediaId)));
+  if (reviewId) invalidations.push(delLocal(reviewCommentsKey(reviewId)));
+  await Promise.all(invalidations);
+};
+
+const setPublicCacheHeaders = (res, isAuthenticated) => {
+  res.set(
+    "Cache-Control",
+    isAuthenticated
+      ? "private, no-store"
+      : "public, max-age=60, stale-while-revalidate=300",
+  );
+};
 
 const extractMentions = (text) => {
   if (!text) return [];
@@ -71,10 +99,16 @@ const notifyMentions = async (
           createdAt: new Date(),
           icon: "AtSign",
         });
-        await deleteByPrefix("notifications:");
+        await invalidateNotificationCache(targetUserId);
 
       }
-    } catch (e) {}
+    } catch (error) {
+      logger.warn("review_mention_notification_failed", {
+        username,
+        reviewId,
+        message: error?.message || "unknown",
+      });
+    }
   }
 };
 
@@ -176,7 +210,13 @@ exports.addReview = catchAsync(async (req, res, next) => {
             [`genreCounts.${g.id}`]: admin.firestore.FieldValue.increment(2),
           });
         });
-      } catch (e) {}
+      } catch (error) {
+        logger.warn("review_genre_enrichment_failed", {
+          uid,
+          mediaId,
+          message: error?.message || "unknown",
+        });
+      }
     }
   });
 
@@ -190,10 +230,13 @@ exports.addReview = catchAsync(async (req, res, next) => {
       createdAt: new Date(),
       icon: "TrendingUp",
     });
-    await deleteByPrefix("notifications:");
+    await invalidateNotificationCache(uid);
   }
 
-  await deleteByPrefix("feed:");
+  await Promise.all([
+    invalidateFeedCache(),
+    invalidatePublicReviewCache({ mediaId }),
+  ]);
   if (rating !== null && rating !== undefined) {
     await markRatedReviewAsWatched(uid, {
       mediaId,
@@ -265,7 +308,10 @@ exports.updateReview = catchAsync(async (req, res, next) => {
       createdAt: oldData.createdAt,
     });
   }
-  await deleteByPrefix("feed:");
+  await Promise.all([
+    invalidateFeedCache(),
+    invalidatePublicReviewCache({ mediaId: oldData.mediaId }),
+  ]);
 
   const newMentions = getNewMentions(oldData.text, text);
   if (newMentions.length > 0) {
@@ -335,7 +381,13 @@ exports.deleteReview = catchAsync(async (req, res, next) => {
   commentsSnapshot.forEach((d) => batch.delete(d.ref));
 
   await batch.commit();
-  await deleteByPrefix("feed:");
+  await Promise.all([
+    invalidateFeedCache(),
+    invalidatePublicReviewCache({
+      mediaId: doc.data().mediaId,
+      reviewId,
+    }),
+  ]);
   res.status(200).json({ message: "Review deletada." });
 });
 
@@ -344,6 +396,7 @@ exports.toggleLikeReview = catchAsync(async (req, res, next) => {
   const { reviewId } = req.params;
   let notificationData = null;
   let isLikedAfterToggle = false;
+  let reviewMediaId = null;
 
   await db.runTransaction(async (t) => {
     const reviewRef = db.collection("reviews").doc(reviewId);
@@ -353,6 +406,7 @@ exports.toggleLikeReview = catchAsync(async (req, res, next) => {
     if (!reviewDoc.exists) throw new Error("Review não encontrada");
 
     const reviewData = reviewDoc.data();
+    reviewMediaId = reviewData.mediaId;
     const currentLikes = reviewData.likesCount || 0;
 
     if (doc.exists) {
@@ -388,11 +442,20 @@ exports.toggleLikeReview = catchAsync(async (req, res, next) => {
     }
   });
 
-  await setLikeState(uid, reviewId, isLikedAfterToggle).catch(() => {});
-  await deleteByPrefix("feed:");
+  await setLikeState(uid, reviewId, isLikedAfterToggle).catch((error) => {
+    logger.warn("review_like_index_sync_failed", {
+      uid,
+      reviewId,
+      message: error?.message || "unknown",
+    });
+  });
+  await Promise.all([
+    invalidateFeedCache(),
+    invalidatePublicReviewCache({ mediaId: reviewMediaId }),
+  ]);
   if (notificationData) {
     await db.collection("notifications").add(notificationData);
-    await deleteByPrefix("notifications:");
+    await invalidateNotificationCache(notificationData.recipientId);
   }
   res.status(200).json({ message: "Sucesso" });
 });
@@ -435,7 +498,13 @@ exports.addComment = catchAsync(async (req, res, next) => {
     commentsCount: admin.firestore.FieldValue.increment(1),
   });
   await batch.commit();
-  await deleteByPrefix("feed:");
+  await Promise.all([
+    invalidateFeedCache(),
+    invalidatePublicReviewCache({
+      mediaId: reviewData.mediaId,
+      reviewId,
+    }),
+  ]);
 
   if (reviewData.userId !== uid) {
     await db.collection("notifications").add({
@@ -453,7 +522,7 @@ exports.addComment = catchAsync(async (req, res, next) => {
       createdAt: new Date(),
       icon: "MessageCircle",
     });
-    await deleteByPrefix("notifications:");
+    await invalidateNotificationCache(reviewData.userId);
   }
 
   const mentions = extractMentions(text);
@@ -513,7 +582,10 @@ exports.updateComment = catchAsync(async (req, res, next) => {
   });
 
   await batch.commit();
-  await deleteByPrefix("feed:");
+  await Promise.all([
+    invalidateFeedCache(),
+    invalidatePublicReviewCache({ reviewId: oldData.reviewId }),
+  ]);
 
   const newMentions = getNewMentions(oldData.text, text);
   if (newMentions.length > 0) {
@@ -546,60 +618,85 @@ exports.deleteComment = catchAsync(async (req, res, next) => {
   if (!doc.exists) return next(new AppError("Não encontrado.", 404));
   if (doc.data().userId !== uid) return next(new AppError("Proibido.", 403));
 
+  const reviewId = doc.data().reviewId;
+  const reviewSnapshot = await db.collection("reviews").doc(reviewId).get();
+  const mediaId = reviewSnapshot.exists ? reviewSnapshot.data().mediaId : null;
   const batch = db.batch();
   const historySnapshot = await ref.collection("history").get();
   historySnapshot.forEach((hDoc) => batch.delete(hDoc.ref));
   batch.delete(ref);
-  batch.update(db.collection("reviews").doc(doc.data().reviewId), {
+  batch.update(db.collection("reviews").doc(reviewId), {
     commentsCount: admin.firestore.FieldValue.increment(-1),
   });
   await batch.commit();
-  await deleteByPrefix("feed:");
+  await Promise.all([
+    invalidateFeedCache(),
+    invalidatePublicReviewCache({ mediaId, reviewId }),
+  ]);
   res.status(200).json({ message: "Deletado." });
 });
 
 exports.getMediaReviews = catchAsync(async (req, res, next) => {
   const { mediaId } = req.params;
-  const { uid } = req.user || {};
+  const { uid, username } = req.user || {};
 
-  const snapshot = await db
-    .collection("reviews")
-    .where("mediaId", "==", mediaId)
-    .orderBy("createdAt", "desc")
-    .limit(50)
-    .get();
+  const publicReviews = await rememberLocal(
+    mediaReviewsKey(mediaId),
+    PUBLIC_REVIEW_CACHE_TTL_SECONDS,
+    async () => {
+      const snapshot = await db
+        .collection("reviews")
+        .where("mediaId", "==", mediaId)
+        .orderBy("createdAt", "desc")
+        .limit(50)
+        .get();
+      const userCache = await resolveUsernamesFallback(
+        db,
+        snapshot.docs,
+        (doc) => doc.data(),
+      );
 
-  const reviewIds = snapshot.docs.map((d) => d.id);
-  const likedIds = await getLikedReviewIds(uid, reviewIds);
+      return snapshot.docs.map((doc) => {
+        const data = doc.data();
+        const fallback = userCache[data.userId] || {};
+        const ownerUsername =
+          safeUsername(data.username) ||
+          safeUsername(fallback.username) ||
+          "Usuário";
+        return {
+          id: doc.id,
+          mediaId: data.mediaId,
+          mediaType: data.mediaType,
+          mediaTitle: data.mediaTitle,
+          posterPath: data.posterPath || null,
+          backdropPath: data.backdropPath || null,
+          rating: data.rating,
+          text: data.text || null,
+          likesCount: data.likesCount || 0,
+          commentsCount: data.commentsCount || 0,
+          createdAt: data.createdAt,
+          username: ownerUsername,
+          userPhoto: data.userPhoto || fallback.userPhoto || null,
+          levelTitle: data.levelTitle || null,
+          isEliteReview: data.isEliteReview || false,
+          isEdited: data.isEdited || false,
+          replies: [],
+          _ownerUsername: ownerUsername,
+        };
+      });
+    },
+  );
 
-  const userCache = await resolveUsernamesFallback(db, snapshot.docs, (d) => d.data());
+  const likedIds = uid
+    ? await getLikedReviewIds(uid, publicReviews.map((review) => review.id))
+    : new Set();
+  const reviews = publicReviews.map(({ _ownerUsername, ...review }) => ({
+    ...review,
+    isLikedByCurrentUser: likedIds.has(review.id),
+    isOwner: Boolean(username && _ownerUsername === username),
+  }));
 
-  const reviews = snapshot.docs.map((doc) => {
-    const data = doc.data();
-    const fallback = userCache[data.userId] || {};
-    return {
-      id: doc.id,
-      mediaId: data.mediaId,
-      mediaType: data.mediaType,
-      mediaTitle: data.mediaTitle,
-      posterPath: data.posterPath || null,
-      backdropPath: data.backdropPath || null,
-      rating: data.rating,
-      text: data.text || null,
-      likesCount: data.likesCount || 0,
-      commentsCount: data.commentsCount || 0,
-      createdAt: data.createdAt,
-      username: safeUsername(data.username) || safeUsername(fallback.username) || "Usuário",
-      userPhoto: data.userPhoto || fallback.userPhoto || null,
-      levelTitle: data.levelTitle || null,
-      isEliteReview: data.isEliteReview || false,
-      isEdited: data.isEdited || false,
-      isLikedByCurrentUser: likedIds.has(doc.id),
-      isOwner: uid ? data.userId === uid : false,
-      replies: [],
-    };
-  });
-
+  setPublicCacheHeaders(res, Boolean(uid));
   res.status(200).json(reviews);
 });
 
@@ -766,33 +863,52 @@ exports.getUserReviewsOnly = catchAsync(async (req, res, next) => {
 
 exports.getComments = catchAsync(async (req, res, next) => {
   const { reviewId } = req.params;
-  const { uid } = req.user || {};
+  const { uid, username } = req.user || {};
 
-  const snapshot = await db
-    .collection("comments")
-    .where("reviewId", "==", reviewId)
-    .orderBy("createdAt", "asc")
-    .limit(100)
-    .get();
+  const publicComments = await rememberLocal(
+    reviewCommentsKey(reviewId),
+    PUBLIC_REVIEW_CACHE_TTL_SECONDS,
+    async () => {
+      const snapshot = await db
+        .collection("comments")
+        .where("reviewId", "==", reviewId)
+        .orderBy("createdAt", "asc")
+        .limit(100)
+        .get();
+      const userCache = await resolveUsernamesFallback(
+        db,
+        snapshot.docs,
+        (doc) => doc.data(),
+      );
 
-  const userCache = await resolveUsernamesFallback(db, snapshot.docs, (d) => d.data());
+      return snapshot.docs.map((doc) => {
+        const data = doc.data();
+        const fallback = userCache[data.userId] || {};
+        const ownerUsername =
+          safeUsername(data.username) ||
+          safeUsername(fallback.username) ||
+          "Usuário";
+        return {
+          id: doc.id,
+          reviewId: data.reviewId,
+          username: ownerUsername,
+          userPhoto: data.userPhoto || fallback.userPhoto || null,
+          text: data.text,
+          parentId: data.parentId || null,
+          createdAt: data.createdAt,
+          levelTitle: data.levelTitle || null,
+          isEdited: data.isEdited || false,
+          _ownerUsername: ownerUsername,
+        };
+      });
+    },
+  );
 
-  const comments = snapshot.docs.map((d) => {
-    const data = d.data();
-    const fallback = userCache[data.userId] || {};
-    return {
-      id: d.id,
-      reviewId: data.reviewId,
-      username: safeUsername(data.username) || safeUsername(fallback.username) || "Usuário",
-      userPhoto: data.userPhoto || fallback.userPhoto || null,
-      text: data.text,
-      parentId: data.parentId || null,
-      createdAt: data.createdAt,
-      levelTitle: data.levelTitle || null,
-      isEdited: data.isEdited || false,
-      isOwner: uid ? data.userId === uid : false,
-    };
-  });
+  const comments = publicComments.map(({ _ownerUsername, ...comment }) => ({
+    ...comment,
+    isOwner: Boolean(username && _ownerUsername === username),
+  }));
 
+  setPublicCacheHeaders(res, Boolean(uid));
   res.status(200).json(comments);
 });
