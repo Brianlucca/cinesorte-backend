@@ -26,6 +26,8 @@ router.get('/recommendations/:mediaType', verifyToken, tmdbController.getRecomme
 router.get('/search', tmdbController.searchMulti);
 router.get('/details/:mediaType/:id', tmdbController.getDetails);
 router.get('/details/person/:id/external_ids', tmdbController.getPersonExternalIds);
+router.get('/details/person/:id/tagged-images', tmdbController.getPersonTaggedImages);
+router.get('/details/person/:id/filmography', tmdbController.getPersonFilmography);
 router.get('/details/tv/:id/season/:seasonNumber', tmdbController.getSeasonDetails);
 router.get('/details/tv/:id/season/:seasonNumber/episode/:episodeNumber', tmdbController.getEpisodeDetails);
 router.get('/providers/:mediaType/:id', tmdbController.getProviders);
