@@ -1,6 +1,7 @@
 const tmdbApi = require("./tmdb.client");
 const { db } = require("../../config/firebase");
 const catchAsync = require("../../shared/utils/catchAsync");
+const AppError = require("../../shared/errors/AppError");
 const logger = require("../../shared/utils/logger");
 const { rememberLocal } = require("../../shared/cache/cache.service");
 const { personalizedRecommendationsKey } = require("../../shared/cache/cache.keys");
@@ -32,6 +33,7 @@ const DETAILS_PREWARM_CONCURRENCY = Math.max(
   1,
   Number(process.env.TMDB_DETAILS_PREWARM_CONCURRENCY || 2),
 );
+const PERSON_FILMOGRAPHY_PAGE_SIZE = 18;
 const RECOMMENDATION_SEED_LIMIT = Math.max(
   1,
   Number(process.env.TMDB_RECOMMENDATION_SEED_LIMIT || 4),
@@ -47,7 +49,7 @@ let activeDetailsPrewarms = 0;
 const fetchMediaDetails = async (mediaType, id) => {
   let append =
     "credits,watch/providers,videos,recommendations,similar,images,external_ids,keywords";
-  if (mediaType === "person") append = "combined_credits,images,external_ids";
+  if (mediaType === "person") append = "images,external_ids";
 
   const response = await tmdbApi.get(`/${mediaType}/${id}`, {
     params: { append_to_response: append, language: "pt-BR" },
@@ -549,6 +551,98 @@ exports.getDetails = catchAsync(async (req, res, next) => {
 exports.getPersonExternalIds = catchAsync(async (req, res, next) => {
   const response = await tmdbApi.get(`/person/${req.params.id}/external_ids`);
   res.status(200).json(response.data);
+});
+
+exports.getPersonTaggedImages = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const page = Number(req.query.page || 1);
+
+  if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id))) {
+    return next(new AppError("ID da pessoa inválido.", 400));
+  }
+  if (!Number.isSafeInteger(page) || page < 1 || page > 500) {
+    return next(new AppError("Página de imagens inválida.", 400));
+  }
+
+  const images = await rememberTmdb(
+    "person-tagged-images",
+    { id, page },
+    600,
+    async () => {
+      const response = await tmdbApi.get(`/person/${id}/tagged_images`, {
+        params: { page },
+      });
+      return response.data;
+    },
+  );
+
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=300");
+  res.status(200).json(images);
+});
+
+exports.getPersonFilmography = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const page = Number(req.query.page || 1);
+
+  if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id))) {
+    return next(new AppError("ID da pessoa inválido.", 400));
+  }
+  if (!Number.isSafeInteger(page) || page < 1 || page > 500) {
+    return next(new AppError("Página da filmografia inválida.", 400));
+  }
+
+  const credits = await rememberTmdb(
+    "person-filmography",
+    { id },
+    600,
+    async () => {
+      const response = await tmdbApi.get(`/person/${id}/combined_credits`, {
+        params: { language: "pt-BR" },
+      });
+      const uniqueCredits = new Map();
+
+      (response.data.cast || []).forEach((credit) => {
+        if (!credit?.id) return;
+        const mediaType = credit.media_type || (credit.title ? "movie" : "tv");
+        const key = `${mediaType}-${credit.id}`;
+        if (uniqueCredits.has(key)) return;
+
+        uniqueCredits.set(key, {
+          id: credit.id,
+          media_type: mediaType,
+          title: credit.title,
+          name: credit.name,
+          character: credit.character,
+          release_date: credit.release_date,
+          first_air_date: credit.first_air_date,
+          vote_count: credit.vote_count,
+        });
+      });
+
+      return Array.from(uniqueCredits.values()).sort((left, right) => {
+        const dateLeft = left.release_date || left.first_air_date || "";
+        const dateRight = right.release_date || right.first_air_date || "";
+        if (!dateLeft && dateRight) return 1;
+        if (dateLeft && !dateRight) return -1;
+        const dateDifference = dateRight.localeCompare(dateLeft);
+        if (dateDifference !== 0) return dateDifference;
+        return (right.vote_count || 0) - (left.vote_count || 0);
+      });
+    },
+  );
+  const totalPages = Math.ceil(credits.length / PERSON_FILMOGRAPHY_PAGE_SIZE);
+
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=300");
+  res.status(200).json({
+    id: Number(id),
+    page,
+    total_pages: totalPages,
+    total_results: credits.length,
+    results: credits.slice(
+      (page - 1) * PERSON_FILMOGRAPHY_PAGE_SIZE,
+      page * PERSON_FILMOGRAPHY_PAGE_SIZE,
+    ),
+  });
 });
 
 exports.searchMulti = catchAsync(async (req, res, next) => {

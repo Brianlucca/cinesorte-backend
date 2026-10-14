@@ -21,7 +21,7 @@ The backend is responsible for more than catalog data. It manages user identity 
 | Domain | Responsibilities |
 | --- | --- |
 | **Authentication and accounts** | Registration, email verification, Google sign-in, password and email changes, provider linking, secure sessions, account deletion, profile updates, and security activity. |
-| **TMDB gateway** | Search, discovery, trending titles, current releases, genres, trailers, recommendations, providers, and detailed movie, show, season, episode, and person data without exposing the TMDB credential to the client. |
+| **TMDB gateway** | Search, discovery, trending titles, current releases, genres, trailers, recommendations, providers, detailed movie, show, season, episode, and person data, plus paginated tagged images and filmographies for people, without exposing the TMDB credential to the client. |
 | **Social graph** | Following, followers, suggestions, compatibility scores, profile statistics, user blocking, and public profile data. |
 | **Feed and reviews** | Global and following feeds, shared collections, ratings, reviews, comments, mentions, likes, moderation helpers, and activity aggregation. |
 | **Lists and activity** | Custom media lists, public sharing, list cloning, saved interactions, viewing diary, and rated-review reconciliation. |
