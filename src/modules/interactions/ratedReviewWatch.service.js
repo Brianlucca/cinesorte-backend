@@ -12,7 +12,14 @@ const {
 
 const hasValidRating = (rating) => {
   const value = Number(rating);
-  return rating !== null && rating !== undefined && Number.isFinite(value) && value >= 1 && value <= 5;
+  return (
+    rating !== null &&
+    rating !== undefined &&
+    Number.isFinite(value) &&
+    value > 0 &&
+    value <= 5 &&
+    Number.isInteger(value * 2)
+  );
 };
 
 async function markRatedReviewAsWatched(uid, reviewData) {
