@@ -6,6 +6,11 @@ const safeUrlSchema = z
   .string()
   .url('URL inválida.')
   .refine((value) => value.startsWith('https://'), 'A URL deve usar HTTPS.');
+const reviewRatingSchema = z
+  .number()
+  .min(0)
+  .max(10)
+  .refine((value) => Number.isInteger(value * 2), 'A nota deve usar incrementos de meia estrela.');
 
 const registerSchema = z.object({
   name: z.string().min(2).max(50).regex(nameRegex),
@@ -83,7 +88,7 @@ const interactionSchema = z.object({
 const reviewSchema = z.object({
   mediaId: z.union([z.string(), z.number()]),
   mediaType: z.enum(['movie', 'tv', 'person', 'episode']),
-  rating: z.number().min(0).max(10).optional().nullable(),
+  rating: reviewRatingSchema.optional().nullable(),
   text: z.string().max(2000).optional(),
   mediaTitle: z.string().optional(),
   posterPath: z.string().nullable().optional(),
@@ -92,7 +97,7 @@ const reviewSchema = z.object({
 
 const reviewUpdateSchema = z.object({
   text: z.string().max(2000).optional(),
-  rating: z.number().min(0).max(10).optional().nullable(),
+  rating: reviewRatingSchema.optional().nullable(),
 });
 
 const commentSchema = z
