@@ -177,7 +177,7 @@ exports.upsertList = catchAsync(async (req, res, next) => {
 
   if (listId) {
     const updatedDoc = await listRef.get();
-    await syncSharedListPosts(uid, id, updatedDoc.data() || listData);
+    syncSharedListPosts(uid, id, updatedDoc.data() || listData).catch(() => {});
   }
 
   await invalidateUserListsCache(uid);
@@ -284,16 +284,17 @@ exports.addMediaToList = catchAsync(async (req, res, next) => {
   );
 
   if (!exists) {
+    const now = new Date();
     const updatedItems = [...currentItems, safeMediaItem];
     await listRef.update({
       items: admin.firestore.FieldValue.arrayUnion(safeMediaItem),
-      updatedAt: new Date(),
+      updatedAt: now,
     });
-    await syncSharedListPosts(uid, listId, {
+    syncSharedListPosts(uid, listId, {
       ...doc.data(),
       items: updatedItems,
-      updatedAt: new Date(),
-    });
+      updatedAt: now,
+    }).catch(() => {});
     await invalidateUserListsCache(uid);
   }
   res.status(200).json({ message: "Adicionado." });
@@ -458,12 +459,13 @@ exports.removeMediaFromList = catchAsync(async (req, res, next) => {
     (item) => item.id.toString() !== mediaId.toString(),
   );
 
-  await listRef.update({ items: updatedItems, updatedAt: new Date() });
-  await syncSharedListPosts(uid, listId, {
+  const now = new Date();
+  await listRef.update({ items: updatedItems, updatedAt: now });
+  syncSharedListPosts(uid, listId, {
     ...doc.data(),
     items: updatedItems,
-    updatedAt: new Date(),
-  });
+    updatedAt: now,
+  }).catch(() => {});
   await invalidateUserListsCache(uid);
   res.status(200).json({ message: "Removido." });
 });
