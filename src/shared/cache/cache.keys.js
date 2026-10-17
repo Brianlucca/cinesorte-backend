@@ -30,6 +30,8 @@ const mediaInteractionKey = (userId, mediaId) =>
   `user-options:interaction:${safeUserId(userId)}:${safePart(mediaId)}`;
 const userListsKey = (userId) => `user-options:lists:${safeUserId(userId)}`;
 const mediaReviewsKey = (mediaId) => `reviews:media:${safePart(mediaId)}`;
+const mediaLikedReviewsKey = (userId, mediaId) =>
+  `reviews:likes:${safeUserId(userId)}:${safePart(mediaId)}`;
 const reviewCommentsKey = (reviewId) => `reviews:comments:${safePart(reviewId)}`;
 const watchProgressListKey = (userId, scope = "web") =>
   `watch-progress:list:${safePart(userId)}:${safePart(scope)}`;
@@ -38,6 +40,8 @@ const extensionProgressKey = (userId, progressId) =>
 const extensionStatusKey = (userId) => `extension:status:${safePart(userId)}`;
 const personalizedRecommendationsKey = (userId, mediaType, page = 1) =>
   `recommendations:user:${safePart(userId)}:${safePart(mediaType)}:${safePart(page)}`;
+const socialListKey = (ownerUid, collectionName) =>
+  `social:list:${safeUserId(ownerUid)}:${safePart(collectionName)}`;
 
 module.exports = {
   feedKey,
@@ -51,9 +55,11 @@ module.exports = {
   mediaInteractionKey,
   userListsKey,
   mediaReviewsKey,
+  mediaLikedReviewsKey,
   reviewCommentsKey,
   watchProgressListKey,
   extensionProgressKey,
   extensionStatusKey,
   personalizedRecommendationsKey,
+  socialListKey,
 };
