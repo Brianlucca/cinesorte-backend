@@ -15,7 +15,12 @@ const {
   resolveUsernamesFallback,
   getCreatedAtMillis,
 } = require("../socialFeed.service");
-const { getLikedReviewIds, setLikeState } = require("../reviewLikeState.service");
+const {
+  getLikedReviewIds,
+  getMediaLikedReviewIds,
+  invalidateLikedReviewsCache,
+  setLikeState,
+} = require("../reviewLikeState.service");
 const {
   rememberLocal,
   delLocal,
@@ -452,6 +457,7 @@ exports.toggleLikeReview = catchAsync(async (req, res, next) => {
   await Promise.all([
     invalidateFeedCache(),
     invalidatePublicReviewCache({ mediaId: reviewMediaId }),
+    invalidateLikedReviewsCache(uid, reviewMediaId),
   ]);
   if (notificationData) {
     await db.collection("notifications").add(notificationData);
@@ -688,7 +694,7 @@ exports.getMediaReviews = catchAsync(async (req, res, next) => {
   );
 
   const likedIds = uid
-    ? await getLikedReviewIds(uid, publicReviews.map((review) => review.id))
+    ? await getMediaLikedReviewIds(uid, mediaId, publicReviews.map((review) => review.id))
     : new Set();
   const reviews = publicReviews.map(({ _ownerUsername, ...review }) => ({
     ...review,
