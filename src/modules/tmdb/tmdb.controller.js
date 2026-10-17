@@ -50,6 +50,7 @@ const fetchMediaDetails = async (mediaType, id) => {
   let append =
     "credits,watch/providers,videos,recommendations,similar,images,external_ids,keywords";
   if (mediaType === "person") append = "images,external_ids";
+  if (mediaType === "movie") append += ",release_dates";
 
   const response = await tmdbApi.get(`/${mediaType}/${id}`, {
     params: { append_to_response: append, language: "pt-BR" },
@@ -69,6 +70,26 @@ const fetchMediaDetails = async (mediaType, id) => {
 
   response.data.trailer = best ? { key: best.key, site: best.site } : null;
   delete response.data.videos;
+
+  if (mediaType === "movie") {
+    const results = response.data.release_dates?.results;
+    if (Array.isArray(results)) {
+      response.data.release_dates = {
+        results: results
+          .filter((entry) => ["BR", "US"].includes(entry?.iso_3166_1))
+          .map((entry) => ({
+            iso_3166_1: entry.iso_3166_1,
+            release_dates: (entry.release_dates || []).map((release) => ({
+              type: release?.type,
+              release_date: String(release?.release_date || "").slice(0, 10) || null,
+            })),
+          })),
+      };
+    } else {
+      delete response.data.release_dates;
+    }
+  }
+
   return response.data;
 };
 
