@@ -6,8 +6,9 @@ const catchAsync = require("../../shared/utils/catchAsync");
 const AppError = require("../../shared/errors/AppError");
 const logger = require("../../shared/utils/logger");
 const {
+  set,
   del,
-  deleteLocalByPrefix,
+  deleteByPrefix,
   remember,
 } = require("../../shared/cache/cache.service");
 const {
@@ -55,10 +56,29 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
   const interactionRef = db.collection("interactions").doc(docId);
   const userRef = db.collection("users").doc(uid);
   let levelUpInfo = null;
+  let savedInteraction = null;
+
+  const needsGenres =
+    action === "like" || action === "favorite" || action === "watched";
+  const genresPromise = needsGenres
+    ? tmdbApi
+        .get(`/${mediaType}/${mediaId}`)
+        .then((tmdbRes) => tmdbRes.data.genres || [])
+        .catch((error) => {
+          logger.warn("interaction_genre_enrichment_failed", {
+            uid,
+            mediaId,
+            message: error?.message || "unknown",
+          });
+          return null;
+        })
+    : null;
 
   await db.runTransaction(async (t) => {
-    const doc = await t.get(interactionRef);
-    const userDoc = await t.get(userRef);
+    const [doc, userDoc] = await Promise.all([
+      t.get(interactionRef),
+      t.get(userRef),
+    ]);
     const userData = userDoc.data();
 
     let data = doc.exists
@@ -149,48 +169,60 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
       }
     }
 
-    if (genreWeight !== 0) {
-      try {
-        const tmdbRes = await tmdbApi.get(`/${mediaType}/${mediaId}`);
-        const genres = tmdbRes.data.genres || [];
+    if (genreWeight !== 0 && genresPromise) {
+      const genres = await genresPromise;
+      if (genres) {
         genres.forEach((g) => {
           userUpdates[`genreCounts.${g.id}`] =
             admin.firestore.FieldValue.increment(genreWeight);
-        });
-      } catch (error) {
-        logger.warn("interaction_genre_enrichment_failed", {
-          uid,
-          mediaId,
-          message: error?.message || "unknown",
         });
       }
     }
 
     if (newLevel > initialLevel) levelUpInfo = newLevel;
     if (Object.keys(userUpdates).length > 0) t.update(userRef, userUpdates);
+    savedInteraction = serializeInteraction(data);
   });
 
-  if (levelUpInfo) {
-    await db.collection("notifications").add({
-      recipientId: uid,
-      type: "level_up",
-      title: "Level Up!",
-      message: `Parabéns! Você alcançou o nível ${levelUpInfo}.`,
-      read: false,
-      createdAt: new Date(),
-      icon: "TrendingUp",
-    });
-    await invalidateNotificationCache(uid);
+  if (savedInteraction) {
+    await set(
+      mediaInteractionKey(uid, normalizedMediaId),
+      { interaction: savedInteraction },
+      PERSONAL_OPTIONS_CACHE_TTL_SECONDS,
+    );
+  } else {
+    await del(mediaInteractionKey(uid, normalizedMediaId));
   }
-  await Promise.all([
-    deleteLocalByPrefix(`recommendations:user:${uid}:`),
-    del(userInteractionsKey(uid)),
-    del(mediaInteractionKey(uid, mediaId)),
-    ...(normalizedMediaId !== String(mediaId)
-      ? [del(mediaInteractionKey(uid, normalizedMediaId))]
-      : []),
-  ]);
+  if (normalizedMediaId !== String(mediaId)) {
+    await del(mediaInteractionKey(uid, mediaId));
+  }
+
   res.status(200).json({ message: "Sucesso." });
+
+  try {
+    if (levelUpInfo) {
+      await db.collection("notifications").add({
+        recipientId: uid,
+        type: "level_up",
+        title: "Level Up!",
+        message: `Parabéns! Você alcançou o nível ${levelUpInfo}.`,
+        read: false,
+        createdAt: new Date(),
+        icon: "TrendingUp",
+      });
+      await invalidateNotificationCache(uid);
+    }
+    await Promise.all([
+      deleteByPrefix(`recommendations:user:${uid}:`),
+      del(userInteractionsKey(uid)),
+    ]);
+  } catch (error) {
+    logger.warn("interaction_post_response_tasks_failed", {
+      uid,
+      mediaId,
+      message: error?.message || "unknown",
+    });
+  }
 });
 
 exports.getUserInteractions = catchAsync(async (req, res, next) => {

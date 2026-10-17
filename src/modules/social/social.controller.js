@@ -1,12 +1,15 @@
 const admin = require("firebase-admin");
 
 const { db } = require("../../config/firebase");
-const { deleteLocalByPrefix } = require("../../shared/cache/cache.service");
+const { deleteLocalByPrefix, remember, del } = require("../../shared/cache/cache.service");
+const { socialListKey } = require("../../shared/cache/cache.keys");
 const AppError = require("../../shared/errors/AppError");
 const catchAsync = require("../../shared/utils/catchAsync");
 const logger = require("../../shared/utils/logger");
 const { checkTrophies } = require("../../shared/utils/gamification");
 const { invalidateNotificationCache } = require("../notifications/notificationCache.service");
+
+const SOCIAL_LIST_CACHE_TTL_SECONDS = 300;
 
 async function getUidByUsername(username) {
   if (!username) throw new AppError("Usuário não especificado.", 400);
@@ -45,8 +48,24 @@ function serializePublicSocialUser(data = {}) {
   };
 }
 
-async function getUserSocialList({ userId, collectionName, paged, requesterUid }) {
-  const targetUid = await resolveUserId(userId, requesterUid);
+async function getUserSocialList({ userId, collectionName, paged, requesterUid, requesterUsername }) {
+  const targetUid =
+    userId && requesterUsername && userId === requesterUsername
+      ? requesterUid
+      : await resolveUserId(userId, requesterUid);
+
+  if (!paged) {
+    return remember(
+      socialListKey(targetUid, collectionName),
+      SOCIAL_LIST_CACHE_TTL_SECONDS,
+      () => loadSocialList({ targetUid, collectionName, paged: null }),
+    );
+  }
+
+  return loadSocialList({ targetUid, collectionName, paged });
+}
+
+async function loadSocialList({ targetUid, collectionName, paged }) {
   const limit = Math.min(Number(paged?.limit) || 50, 50);
   let query = db
     .collection("users")
@@ -79,6 +98,11 @@ async function getUserSocialList({ userId, collectionName, paged, requesterUid }
     hasMore: snapshot.docs.length === limit,
     nextCursor: lastSince ? lastSince.toDate?.().getTime?.() || new Date(lastSince).getTime() : null,
   };
+}
+
+async function invalidateSocialList(ownerUid, collectionName) {
+  if (!ownerUid) return;
+  await del(socialListKey(ownerUid, collectionName));
 }
 
 async function getLikedMediaIdsForUser(userId) {
@@ -176,9 +200,12 @@ exports.followUser = catchAsync(async (req, res, next) => {
     }
   });
 
-  await deleteLocalByPrefix("feed:");
+  await Promise.all([
+    deleteLocalByPrefix("feed:"),
+    invalidateSocialList(uid, "following"),
+    invalidateSocialList(targetUserId, "followers"),
+  ]);
   await invalidateNotificationCache(targetUserId);
-
 
   res.status(200).json({ message: "Seguindo." });
 });
@@ -199,7 +226,11 @@ exports.unfollowUser = catchAsync(async (req, res, next) => {
   });
   await batch.commit();
 
-  await deleteLocalByPrefix("feed:");
+  await Promise.all([
+    deleteLocalByPrefix("feed:"),
+    invalidateSocialList(uid, "following"),
+    invalidateSocialList(targetUserId, "followers"),
+  ]);
   res.status(200).json({ message: "Deixou de seguir." });
 });
 
@@ -261,7 +292,13 @@ exports.blockUser = catchAsync(async (req, res, next) => {
     }
   });
 
-  await deleteLocalByPrefix("feed:");
+  await Promise.all([
+    deleteLocalByPrefix("feed:"),
+    invalidateSocialList(uid, "following"),
+    invalidateSocialList(uid, "followers"),
+    invalidateSocialList(targetUserId, "following"),
+    invalidateSocialList(targetUserId, "followers"),
+  ]);
   res.status(200).json({ blocked: true });
 });
 
@@ -344,7 +381,7 @@ exports.getMatchPercentage = catchAsync(async (req, res, next) => {
 
 exports.getUserFollowersList = catchAsync(async (req, res, next) => {
   const { userId } = req.params;
-  const { uid } = req.user;
+  const { uid, username } = req.user;
   const wantsPaged = req.query.paged === "true";
 
   try {
@@ -352,6 +389,7 @@ exports.getUserFollowersList = catchAsync(async (req, res, next) => {
       userId,
       collectionName: "followers",
       requesterUid: uid,
+      requesterUsername: username,
       paged: wantsPaged ? { cursor: req.query.cursor, limit: req.query.limit } : null,
     });
     res.status(200).json(result);
@@ -362,7 +400,7 @@ exports.getUserFollowersList = catchAsync(async (req, res, next) => {
 
 exports.getUserFollowingList = catchAsync(async (req, res, next) => {
   const { userId } = req.params;
-  const { uid } = req.user;
+  const { uid, username } = req.user;
   const wantsPaged = req.query.paged === "true";
 
   try {
@@ -370,6 +408,7 @@ exports.getUserFollowingList = catchAsync(async (req, res, next) => {
       userId,
       collectionName: "following",
       requesterUid: uid,
+      requesterUsername: username,
       paged: wantsPaged ? { cursor: req.query.cursor, limit: req.query.limit } : null,
     });
     res.status(200).json(result);
