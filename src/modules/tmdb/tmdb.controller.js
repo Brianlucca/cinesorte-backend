@@ -3,7 +3,7 @@ const { db } = require("../../config/firebase");
 const catchAsync = require("../../shared/utils/catchAsync");
 const AppError = require("../../shared/errors/AppError");
 const logger = require("../../shared/utils/logger");
-const { rememberLocal } = require("../../shared/cache/cache.service");
+const { remember } = require("../../shared/cache/cache.service");
 const { personalizedRecommendationsKey } = require("../../shared/cache/cache.keys");
 
 const tmdbCacheKey = (scope, params = {}) => {
@@ -14,7 +14,7 @@ const tmdbCacheKey = (scope, params = {}) => {
 };
 
 const rememberTmdb = (scope, params, ttlSeconds, factory) =>
-  rememberLocal(tmdbCacheKey(scope, params), ttlSeconds, factory);
+  remember(tmdbCacheKey(scope, params), ttlSeconds, factory);
 
 const getShortCacheTtl = (value) => {
   const configuredTtl = Number(value);
@@ -343,7 +343,7 @@ exports.getRecommendations = catchAsync(async (req, res, next) => {
   const { uid } = req.user;
   const { mediaType } = req.params;
   const page = req.query.page || 1;
-  const results = await rememberLocal(
+  const results = await remember(
     personalizedRecommendationsKey(uid, mediaType, page),
     300,
     async () => {

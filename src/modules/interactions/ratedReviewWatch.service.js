@@ -3,7 +3,7 @@ const admin = require("firebase-admin");
 const { getXPNeeded, checkTrophies } = require("../../shared/utils/gamification");
 const {
   del,
-  deleteLocalByPrefix,
+  deleteByPrefix,
 } = require("../../shared/cache/cache.service");
 const {
   mediaInteractionKey,
@@ -83,7 +83,7 @@ async function markRatedReviewAsWatched(uid, reviewData) {
 
   if (created) {
     await Promise.all([
-      deleteLocalByPrefix(`recommendations:user:${uid}:`),
+      deleteByPrefix(`recommendations:user:${uid}:`),
       del(userInteractionsKey(uid)),
       del(mediaInteractionKey(uid, mediaId)),
     ]);

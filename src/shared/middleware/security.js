@@ -72,7 +72,7 @@ const tmdbApiLimiter = rateLimit({
 
 const publicContentLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 60,
+  max: 180,
   standardHeaders: true,
   legacyHeaders: false,
   message: { message: "Muitas consultas públicas. Tente novamente em instantes." },

@@ -7,7 +7,7 @@ const AppError = require("../../shared/errors/AppError");
 const logger = require("../../shared/utils/logger");
 const {
   del,
-  deleteLocalByPrefix,
+  deleteByPrefix,
   remember,
 } = require("../../shared/cache/cache.service");
 const {
@@ -183,7 +183,7 @@ exports.recordInteraction = catchAsync(async (req, res, next) => {
     await invalidateNotificationCache(uid);
   }
   await Promise.all([
-    deleteLocalByPrefix(`recommendations:user:${uid}:`),
+    deleteByPrefix(`recommendations:user:${uid}:`),
     del(userInteractionsKey(uid)),
     del(mediaInteractionKey(uid, mediaId)),
     ...(normalizedMediaId !== String(mediaId)
