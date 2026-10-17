@@ -1,6 +1,9 @@
 const { db } = require("../../config/firebase");
+const { remember, del } = require("../../shared/cache/cache.service");
+const { mediaLikedReviewsKey } = require("../../shared/cache/cache.keys");
 
 const MAX_IN_QUERY = 30;
+const LIKED_REVIEWS_TTL_SECONDS = 300;
 
 function chunk(items, size) {
   const output = [];
@@ -72,6 +75,25 @@ async function getLikedReviewIds(uid, reviewIds) {
   return likedIds;
 }
 
+async function getMediaLikedReviewIds(uid, mediaId, reviewIds) {
+  if (!uid || !mediaId || !Array.isArray(reviewIds) || reviewIds.length === 0) {
+    return new Set();
+  }
+
+  const cached = await remember(
+    mediaLikedReviewsKey(uid, mediaId),
+    LIKED_REVIEWS_TTL_SECONDS,
+    async () => [...(await getLikedReviewIds(uid, reviewIds))],
+  );
+
+  return new Set(Array.isArray(cached) ? cached : []);
+}
+
+async function invalidateLikedReviewsCache(uid, mediaId) {
+  if (!uid || !mediaId) return;
+  await del(mediaLikedReviewsKey(uid, mediaId));
+}
+
 async function setLikeState(uid, reviewId, liked) {
   const ref = getIndexRef(uid, reviewId);
   if (liked) {
@@ -87,5 +109,7 @@ async function setLikeState(uid, reviewId, liked) {
 
 module.exports = {
   getLikedReviewIds,
+  getMediaLikedReviewIds,
+  invalidateLikedReviewsCache,
   setLikeState,
 };
