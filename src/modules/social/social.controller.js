@@ -45,6 +45,7 @@ function serializePublicSocialUser(data = {}) {
     userPhoto: data.photoURL || null,
     photoURL: data.photoURL || null,
     levelTitle: data.levelTitle || null,
+    reviewsCount: data.reviewsCount || 0,
   };
 }
 
@@ -351,6 +352,7 @@ exports.getProfileStats = catchAsync(async (req, res, next) => {
     level: userData.level || 1,
     levelTitle: userData.levelTitle || "Espectador",
     trophies: userData.trophies || [],
+    reviewsCount: userData.reviewsCount || 0,
   });
 });
 
@@ -461,5 +463,6 @@ exports.getUserStats = catchAsync(async (req, res, next) => {
     level: userData.level || 1,
     levelTitle: userData.levelTitle || "Espectador",
     trophies: userData.trophies || [],
+    reviewsCount: userData.reviewsCount || 0,
   });
 });
