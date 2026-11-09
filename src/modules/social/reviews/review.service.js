@@ -806,6 +806,28 @@ exports.getUserReviews = catchAsync(async (req, res, next) => {
   res.status(200).json({ items: feed, hasMore, nextCursor });
 });
 
+exports.getUserReviewsCount = catchAsync(async (req, res, next) => {
+  const { username } = req.params;
+
+  const userQuery = await db.collection("users").where("username", "==", username).limit(1).get();
+  if (userQuery.empty) {
+    return res.status(200).json({ reviewsCount: 0, levelTitle: calculateLevelTitle(0) });
+  }
+
+  const targetUid = userQuery.docs[0].id;
+  const aggregate = await db
+    .collection("reviews")
+    .where("userId", "==", targetUid)
+    .count()
+    .get();
+  const reviewsCount = aggregate.data().count || 0;
+
+  res.status(200).json({
+    reviewsCount,
+    levelTitle: calculateLevelTitle(reviewsCount),
+  });
+});
+
 exports.getUserReviewsOnly = catchAsync(async (req, res, next) => {
   const { username } = req.params;
   const { uid } = req.user || {};
