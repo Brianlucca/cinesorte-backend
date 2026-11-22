@@ -668,10 +668,11 @@ exports.getPersonFilmography = catchAsync(async (req, res, next) => {
 
 exports.searchMulti = catchAsync(async (req, res, next) => {
   if (!req.query.query) return res.status(400).json({ message: "Query vazia" });
+  const language = req.query.language === "en-US" ? "en-US" : "pt-BR";
   const response = await tmdbApi.get("/search/multi", {
     params: {
       query: req.query.query,
-      language: "pt-BR",
+      language,
       include_adult: false,
       page: 1,
     },

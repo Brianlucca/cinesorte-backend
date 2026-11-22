@@ -143,6 +143,15 @@ const addToListSchema = z.object({
   }),
 });
 
+const moveListMediaSchema = z.object({
+  sourceListId: z.string().min(1).max(200),
+  targetListId: z.string().min(1).max(200),
+  mediaId: z.union([z.number(), z.string()]),
+}).refine((data) => data.sourceListId !== data.targetListId, {
+  message: 'Escolha uma lista de destino diferente.',
+  path: ['targetListId'],
+});
+
 const messageMediaSchema = z.object({
   id: z.union([z.string(), z.number()]),
   mediaId: z.union([z.string(), z.number()]).optional(),
@@ -214,6 +223,7 @@ module.exports = {
   commentUpdateSchema,
   listSchema,
   addToListSchema,
+  moveListMediaSchema,
   createDirectConversationSchema,
   createGroupConversationSchema,
   sendMessageSchema,

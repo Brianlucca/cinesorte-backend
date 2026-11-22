@@ -7,7 +7,7 @@ const authController = require("../auth/auth.controller");
 const { verifyToken, requireTerms } = require("../../shared/middleware/auth");
 const { publicContentLimiter } = require("../../shared/middleware/security");
 const validate = require("../../shared/middleware/validate");
-const { listSchema, addToListSchema, profileSchema, interactionSchema } = require("../../shared/validation/schemas");
+const { listSchema, addToListSchema, moveListMediaSchema, profileSchema, interactionSchema } = require("../../shared/validation/schemas");
 
 router.get('/search', verifyToken, userController.searchUsers);
 router.get('/profile/:username', publicContentLimiter, userController.getUserProfile);
@@ -23,6 +23,7 @@ router.post('/interactions/reconcile-rated-reviews', verifyToken, interactionCon
 router.post('/lists', verifyToken, requireTerms, validate(listSchema), listController.upsertList);
 router.post('/lists/clone', verifyToken, requireTerms, listController.cloneList);
 router.post('/lists/add', verifyToken, validate(addToListSchema), listController.addMediaToList);
+router.post('/lists/move', verifyToken, validate(moveListMediaSchema), listController.moveMediaBetweenLists);
 router.get('/lists/:username', verifyToken, listController.getUserLists);
 router.delete('/lists/:listId', verifyToken, listController.deleteList);
 router.delete('/lists/:listId/media/:mediaId', verifyToken, listController.removeMediaFromList);

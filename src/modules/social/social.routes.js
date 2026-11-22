@@ -42,5 +42,6 @@ router.get('/comments/:reviewId', optionalVerify, publicContentLimiter, reviewCo
 router.post('/share-list', verifyToken, listController.shareList);
 router.get('/lists/:username/:listId', verifyToken, listController.getPublicListDetails);
 router.get('/reviews-only/:username', verifyToken, reviewController.getUserReviewsOnly);
+router.get('/reviews-count/:username', verifyToken, reviewController.getUserReviewsCount);
 
 module.exports = router;
