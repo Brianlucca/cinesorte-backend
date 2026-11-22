@@ -300,6 +300,77 @@ exports.addMediaToList = catchAsync(async (req, res, next) => {
   res.status(200).json({ message: "Adicionado." });
 });
 
+exports.moveMediaBetweenLists = catchAsync(async (req, res, next) => {
+  const { uid } = req.user;
+  const { sourceListId, targetListId, mediaId } = req.body;
+  const listsRef = db.collection("users").doc(uid).collection("lists");
+  const sourceRef = listsRef.doc(sourceListId);
+  const targetRef = listsRef.doc(targetListId);
+
+  const result = await db.runTransaction(async (transaction) => {
+    const [sourceDoc, targetDoc] = await Promise.all([
+      transaction.get(sourceRef),
+      transaction.get(targetRef),
+    ]);
+
+    if (!sourceDoc.exists || !targetDoc.exists) {
+      throw new AppError("Lista de origem ou destino não encontrada.", 404);
+    }
+
+    const sourceData = sourceDoc.data();
+    const targetData = targetDoc.data();
+    const sourceItems = sourceData.items || [];
+    const targetItems = targetData.items || [];
+    const mediaItem = sourceItems.find(
+      (item) => item.id.toString() === mediaId.toString(),
+    );
+
+    if (!mediaItem) {
+      throw new AppError("Título não encontrado na lista de origem.", 404);
+    }
+
+    const sourceUpdatedItems = sourceItems.filter(
+      (item) => item.id.toString() !== mediaId.toString(),
+    );
+    const targetAlreadyContains = targetItems.some(
+      (item) => item.id.toString() === mediaId.toString(),
+    );
+    const targetUpdatedItems = targetAlreadyContains
+      ? targetItems
+      : [...targetItems, { ...mediaItem, addedAt: new Date() }];
+    const now = new Date();
+
+    transaction.update(sourceRef, { items: sourceUpdatedItems, updatedAt: now });
+    transaction.update(targetRef, { items: targetUpdatedItems, updatedAt: now });
+
+    return {
+      sourceData,
+      targetData,
+      sourceUpdatedItems,
+      targetUpdatedItems,
+      targetAlreadyContains,
+      now,
+    };
+  });
+
+  syncSharedListPosts(uid, sourceListId, {
+    ...result.sourceData,
+    items: result.sourceUpdatedItems,
+    updatedAt: result.now,
+  }).catch(() => {});
+  syncSharedListPosts(uid, targetListId, {
+    ...result.targetData,
+    items: result.targetUpdatedItems,
+    updatedAt: result.now,
+  }).catch(() => {});
+  await invalidateUserListsCache(uid);
+
+  res.status(200).json({
+    message: "Título movido.",
+    targetAlreadyContained: result.targetAlreadyContains,
+  });
+});
+
 exports.getUserLists = catchAsync(async (req, res, next) => {
   const { username } = req.params;
   const { uid: requestUid } = req.user || {};
