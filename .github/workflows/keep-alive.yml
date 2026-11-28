@@ -11,4 +11,4 @@ jobs:
     steps:
       - name: Ping API
         run: |
-          curl --fail --silent --show-error --max-time 30 https://cinesorte-backend.onrender.com/api/health/live
+          curl --fail --silent --show-error --max-time 30 https://cinesorte-backend-pjlu.onrender.com/api/health/live
